@@ -34,6 +34,7 @@
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/../..
 source "${KUBE_ROOT}/cluster/aws/${KUBE_CONFIG_FILE-"config-default.sh"}"
 source "${KUBE_ROOT}/cluster/common.sh"
+source "${KUBE_ROOT}/cluster/lib/util.sh"
 
 ALLOCATE_NODE_CIDRS=true
 
@@ -48,23 +49,50 @@ MASTER_DISK_ID=
 # Well known tags
 TAG_KEY_MASTER_IP="kubernetes.io/master-ip"
 
-# Defaults: ubuntu -> wily
-if [[ "${KUBE_OS_DISTRIBUTION}" == "ubuntu" ]]; then
-  KUBE_OS_DISTRIBUTION=wily
-fi
-
-# For GCE script compatibility
 OS_DISTRIBUTION=${KUBE_OS_DISTRIBUTION}
 
-case "${KUBE_OS_DISTRIBUTION}" in
-  trusty|wheezy|jessie|vivid|wily|coreos)
-    source "${KUBE_ROOT}/cluster/aws/${KUBE_OS_DISTRIBUTION}/util.sh"
+# Defaults: ubuntu -> wily
+if [[ "${OS_DISTRIBUTION}" == "ubuntu" ]]; then
+  OS_DISTRIBUTION=wily
+fi
+
+# Loads the distro-specific utils script.
+# If the distro is not recommended, prints warnings or exits.
+function load_distro_utils () {
+case "${OS_DISTRIBUTION}" in
+  jessie)
+    ;;
+  wily)
+    ;;
+  vivid)
+    echo "vivid is currently end-of-life and does not get updates." >&2
+    echo "Please consider using wily or jessie instead" >&2
+    echo "(will continue in 10 seconds)" >&2
+    sleep 10
+    ;;
+  coreos)
+    echo "coreos is no longer supported by kube-up; please use jessie instead" >&2
+    exit 2
+    ;;
+  trusty)
+    echo "trusty is no longer supported by kube-up; please use jessie or wily instead" >&2
+    exit 2
+    ;;
+  wheezy)
+    echo "wheezy is no longer supported by kube-up; please use jessie instead" >&2
+    exit 2
     ;;
   *)
-    echo "Cannot start cluster using os distro: ${KUBE_OS_DISTRIBUTION}" >&2
+    echo "Cannot start cluster using os distro: ${OS_DISTRIBUTION}" >&2
+    echo "The current recommended distro is jessie" >&2
     exit 2
     ;;
 esac
+
+source "${KUBE_ROOT}/cluster/aws/${OS_DISTRIBUTION}/util.sh"
+}
+
+load_distro_utils
 
 # This removes the final character in bash (somehow)
 AWS_REGION=${ZONE%?}
@@ -190,6 +218,16 @@ function detect-master() {
   echo "Using master: $KUBE_MASTER (external IP: $KUBE_MASTER_IP)"
 }
 
+# Reads kube-env metadata from master
+#
+# Assumed vars:
+#   KUBE_MASTER_IP
+#   AWS_SSH_KEY
+#   SSH_USER
+function get-master-env() {
+  ssh -oStrictHostKeyChecking=no -i "${AWS_SSH_KEY}" ${SSH_USER}@${KUBE_MASTER_IP} sudo cat /etc/kubernetes/kube_env.yaml
+}
+
 
 function query-running-minions () {
   local query=$1
@@ -265,7 +303,7 @@ function detect-security-groups {
 # Vars set:
 #   AWS_IMAGE
 function detect-image () {
-case "${KUBE_OS_DISTRIBUTION}" in
+case "${OS_DISTRIBUTION}" in
   trusty|coreos)
     detect-trusty-image
     ;;
@@ -282,7 +320,7 @@ case "${KUBE_OS_DISTRIBUTION}" in
     detect-jessie-image
     ;;
   *)
-    echo "Please specify AWS_IMAGE directly (distro ${KUBE_OS_DISTRIBUTION} not recognized)"
+    echo "Please specify AWS_IMAGE directly (distro ${OS_DISTRIBUTION} not recognized)"
     exit 2
     ;;
 esac
@@ -453,8 +491,14 @@ function authorize-security-group-ingress {
 function find-master-pd {
   local name=${MASTER_NAME}-pd
   if [[ -z "${MASTER_DISK_ID}" ]]; then
+    local zone_filter="Name=availability-zone,Values=${ZONE}"
+    if [[ "${KUBE_USE_EXISTING_MASTER:-}" == "true" ]]; then
+      # If we're reusing an existing master, it is likely to be in another zone
+      # If running multizone, your cluster must be uniquely named across zones
+      zone_filter=""
+    fi
     MASTER_DISK_ID=`$AWS_CMD describe-volumes \
-                             --filters Name=availability-zone,Values=${ZONE} \
+                             --filters ${zone_filter} \
                                        Name=tag:Name,Values=${name} \
                                        Name=tag:KubernetesCluster,Values=${CLUSTER_ID} \
                              --query Volumes[].VolumeId`
@@ -780,6 +824,24 @@ function release-elastic-ip {
   fi
 }
 
+# Deletes a security group
+# usage: delete_security_group <sgid>
+function delete_security_group {
+  local -r sg_id=${1}
+
+  echo "Deleting security group: ${sg_id}"
+
+  # We retry in case there's a dependent resource - typically an ELB
+  n=0
+  until [ $n -ge 20 ]; do
+    $AWS_CMD delete-security-group --group-id ${sg_id} > $LOG && return
+    n=$[$n+1]
+    sleep 3
+  done
+  echo "Unable to delete security group: ${sg_id}"
+  exit 1
+}
+
 function ssh-key-setup {
   if [[ ! -f "$AWS_SSH_KEY" ]]; then
     ssh-keygen -f "$AWS_SSH_KEY" -N ''
@@ -833,7 +895,7 @@ function subnet-setup {
 }
 
 function kube-up {
-  echo "Starting cluster using os distro: ${KUBE_OS_DISTRIBUTION}" >&2
+  echo "Starting cluster using os distro: ${OS_DISTRIBUTION}" >&2
 
   get-tokens
 
@@ -927,8 +989,8 @@ function kube-up {
 
   # KUBE_USE_EXISTING_MASTER is used to add minions to an existing master
   if [[ "${KUBE_USE_EXISTING_MASTER:-}" == "true" ]]; then
-    # Detect existing master
     detect-master
+    parse-master-env
 
     # Start minions
     start-minions
@@ -1371,8 +1433,7 @@ function kube-down {
         continue
       fi
 
-      echo "Deleting security group: ${sg_id}"
-      $AWS_CMD delete-security-group --group-id ${sg_id} > $LOG
+      delete_security_group ${sg_id}
     done
 
     subnet_ids=$($AWS_CMD describe-subnets \
@@ -1511,10 +1572,12 @@ function ssh-to-node {
   fi
 
   for try in $(seq 1 5); do
-    if ssh -oLogLevel=quiet -oStrictHostKeyChecking=no -i "${AWS_SSH_KEY}" ${SSH_USER}@${ip} "${cmd}"; then
+    if ssh -oLogLevel=quiet -oConnectTimeout=30 -oStrictHostKeyChecking=no -i "${AWS_SSH_KEY}" ${SSH_USER}@${ip} "echo test > /dev/null"; then
       break
     fi
+    sleep 5
   done
+  ssh -oLogLevel=quiet -oConnectTimeout=30 -oStrictHostKeyChecking=no -i "${AWS_SSH_KEY}" ${SSH_USER}@${ip} "${cmd}"
 }
 
 # Restart the kube-proxy on a node ($1)

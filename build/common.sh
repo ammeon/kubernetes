@@ -193,9 +193,9 @@ function kube::build::prepare_docker_machine() {
   docker-machine inspect "${DOCKER_MACHINE_NAME}" >/dev/null || {
     kube::log::status "Creating a machine to build Kubernetes"
     docker-machine create --driver "${DOCKER_MACHINE_DRIVER}" \
-      --engine-env HTTP_PROXY="${KUBE_BUILD_HTTP_PROXY:-}" \
-      --engine-env HTTPS_PROXY="${KUBE_BUILD_HTTPS_PROXY:-}" \
-      --engine-env NO_PROXY="${KUBE_BUILD_NO_PROXY:-127.0.0.1}" \
+      --engine-env HTTP_PROXY="${KUBERNETES_HTTP_PROXY:-}" \
+      --engine-env HTTPS_PROXY="${KUBERNETES_HTTPS_PROXY:-}" \
+      --engine-env NO_PROXY="${KUBERNETES_NO_PROXY:-127.0.0.1}" \
       "${DOCKER_MACHINE_NAME}" > /dev/null || {
       kube::log::error "Something went wrong creating a machine."
       kube::log::error "Try the following: "
@@ -242,14 +242,11 @@ function kube::build::is_osx() {
 
 function kube::build::update_dockerfile() {
   if kube::build::is_osx; then
-    sed_opts=("-i ''")
+    sed_opts=(-i '')
   else
     sed_opts=(-i)
   fi
-  sed ${sed_opts[@]} "s/KUBE_BUILD_IMAGE_CROSS_TAG/${KUBE_BUILD_IMAGE_CROSS_TAG}/" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
-  sed ${sed_opts[@]} "s#KUBE_BUILD_HTTP_PROXY#${KUBE_BUILD_HTTP_PROXY:-\"\"}#" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
-  sed ${sed_opts[@]} "s#KUBE_BUILD_HTTPS_PROXY#${KUBE_BUILD_HTTPS_PROXY:-\"\"}#" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
-  sed ${sed_opts[@]} "s#KUBE_BUILD_NO_PROXY#${KUBE_BUILD_NO_PROXY:-127.0.0.1}#" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
+  sed "${sed_opts[@]}" "s/KUBE_BUILD_IMAGE_CROSS_TAG/${KUBE_BUILD_IMAGE_CROSS_TAG}/" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
 }
 
 function kube::build::ensure_docker_in_path() {
@@ -925,12 +922,9 @@ function kube::release::package_salt_tarball() {
 }
 
 # This will pack kube-system manifests files for distros without using salt
-# such as Ubuntu Trusty.
-#
-# There are two sources of manifests files: (1) some manifests in the directory
-# cluster/saltbase/salt and cluster/addons can be used directly or after minor
-# revision, so we copy them from there; (2) otherwise, we will maintain separate
-# copies in cluster/gce/<distro>/kube-manifests.
+# such as Ubuntu Trusty. For Trusty, we directly copy manifests from cluster/addons
+# and cluster/saltbase/salt. The script of cluster initialization will remove
+# the salt configuration and evaluate the variables in the manifests.
 function kube::release::package_kube_manifests_tarball() {
   kube::log::status "Building tarball: manifests"
 
@@ -938,7 +932,6 @@ function kube::release::package_kube_manifests_tarball() {
   rm -rf "${release_stage}"
   mkdir -p "${release_stage}/trusty"
 
-  # Source 1: manifests from cluster/saltbase/salt and cluster/addons
   local salt_dir="${KUBE_ROOT}/cluster/saltbase/salt"
   cp "${salt_dir}/fluentd-es/fluentd-es.yaml" "${release_stage}/"
   cp "${salt_dir}/fluentd-gcp/fluentd-gcp.yaml" "${release_stage}/"
@@ -946,6 +939,8 @@ function kube::release::package_kube_manifests_tarball() {
   cp "${salt_dir}/kube-proxy/kube-proxy.manifest" "${release_stage}/"
   cp "${salt_dir}/etcd/etcd.manifest" "${release_stage}/trusty"
   cp "${salt_dir}/kube-scheduler/kube-scheduler.manifest" "${release_stage}/trusty"
+  cp "${salt_dir}/kube-apiserver/kube-apiserver.manifest" "${release_stage}/trusty"
+  cp "${salt_dir}/kube-controller-manager/kube-controller-manager.manifest" "${release_stage}/trusty"
   cp "${salt_dir}/kube-addons/namespace.yaml" "${release_stage}/trusty"
   cp "${salt_dir}/kube-addons/kube-addons.sh" "${release_stage}/trusty"
   cp "${salt_dir}/kube-addons/kube-addon-update.sh" "${release_stage}/trusty"
@@ -954,10 +949,7 @@ function kube::release::package_kube_manifests_tarball() {
   objects=$(cd "${KUBE_ROOT}/cluster/addons" && find . \( -name \*.yaml -or -name \*.yaml.in -or -name \*.json \) | grep -v demo)
   tar c -C "${KUBE_ROOT}/cluster/addons" ${objects} | tar x -C "${release_stage}/trusty"
 
-  # Source 2: manifests from cluster/gce/<distro>/kube-manifests.
-  # TODO(andyzheng0831): Avoid using separate copies for trusty. We should use whatever
-  # from cluster/saltbase/salt to minimize maintenance cost.
-  cp "${KUBE_ROOT}/cluster/gce/trusty/kube-manifests/"* "${release_stage}/trusty"
+  # This is for coreos only. ContainerVM or Trusty does not use it.
   cp -r "${KUBE_ROOT}/cluster/gce/coreos/kube-manifests"/* "${release_stage}/"
 
   kube::release::clean_cruft

@@ -116,7 +116,7 @@ process_content () {
                         -maxdepth ${find_maxdepth} -type f "${find_names[@]}"))
   done
   # Uniquely sort the array
-  IFS=$'\n' local_files=($(sort -u <<<"${local_files[*]-}"))
+  IFS=$'\n' local_files=($(LC_ALL=C sort -u <<<"${local_files[*]-}"))
   unset IFS
 
   for f in ${local_files[@]-}; do
@@ -184,7 +184,7 @@ cat ${KUBE_ROOT}/LICENSE
 
 # Loop through every package in Godeps.json
 for PACKAGE in $(cat Godeps/Godeps.json |\
-                 jq -r ".Deps[].ImportPath" |sort -f); do
+                 jq -r ".Deps[].ImportPath" | LC_ALL=C sort -f); do
 
   process_content ${PACKAGE} LICENSE
   process_content ${PACKAGE} COPYRIGHT

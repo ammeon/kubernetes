@@ -32,7 +32,6 @@ import (
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	"github.com/prometheus/common/model"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/kubelet/metrics"
 	"k8s.io/kubernetes/pkg/kubelet/server/stats"
@@ -337,35 +336,9 @@ type usageDataPerContainer struct {
 	memWorkSetData []uint64
 }
 
-// Performs a get on a node proxy endpoint given the nodename and rest client.
-func nodeProxyRequest(c *client.Client, node, endpoint string) (restclient.Result, error) {
-	subResourceProxyAvailable, err := serverVersionGTE(subResourceServiceAndNodeProxyVersion, c)
-	if err != nil {
-		return restclient.Result{}, err
-	}
-	var result restclient.Result
-	if subResourceProxyAvailable {
-		result = c.Get().
-			Resource("nodes").
-			SubResource("proxy").
-			Name(fmt.Sprintf("%v:%v", node, ports.KubeletPort)).
-			Suffix(endpoint).
-			Do()
-
-	} else {
-		result = c.Get().
-			Prefix("proxy").
-			Resource("nodes").
-			Name(fmt.Sprintf("%v:%v", node, ports.KubeletPort)).
-			Suffix(endpoint).
-			Do()
-	}
-	return result, nil
-}
-
 // Retrieve metrics from the kubelet server of the given node.
 func getKubeletMetricsThroughProxy(c *client.Client, node string) (string, error) {
-	client, err := nodeProxyRequest(c, node, "metrics")
+	client, err := NodeProxyRequest(c, node, "metrics")
 	if err != nil {
 		return "", err
 	}
@@ -391,19 +364,35 @@ func getKubeletMetricsThroughNode(nodeName string) (string, error) {
 	return string(body), nil
 }
 
-// GetKubeletPods retrieves the list of running pods on the kubelet. The pods
-// includes necessary information (e.g., UID, name, namespace for
-// pods/containers), but do not contain the full spec.
-func GetKubeletPods(c *client.Client, node string) (*api.PodList, error) {
-	result := &api.PodList{}
-	client, err := nodeProxyRequest(c, node, "runningpods")
+func getKubeletHeapStats(c *client.Client, nodeName string) (string, error) {
+	client, err := NodeProxyRequest(c, nodeName, "debug/pprof/heap")
 	if err != nil {
-		return &api.PodList{}, err
+		return "", err
 	}
-	if err = client.Into(result); err != nil {
-		return &api.PodList{}, err
+	raw, errRaw := client.Raw()
+	if errRaw != nil {
+		return "", err
 	}
-	return result, nil
+	stats := string(raw)
+	// Only dumping the runtime.MemStats numbers to avoid polluting the log.
+	numLines := 23
+	lines := strings.Split(stats, "\n")
+	return strings.Join(lines[len(lines)-numLines:], "\n"), nil
+}
+
+func PrintAllKubeletPods(c *client.Client, nodeName string) {
+	podList, err := GetKubeletPods(c, nodeName)
+	if err != nil {
+		Logf("Unable to retrieve kubelet pods for node %v: %v", nodeName, err)
+		return
+	}
+	for _, p := range podList.Items {
+		Logf("%v from %v started at %v (%d container statuses recorded)", p.Name, p.Namespace, p.Status.StartTime, len(p.Status.ContainerStatuses))
+		for _, c := range p.Status.ContainerStatuses {
+			Logf("\tContainer %v ready: %v, restart count %v",
+				c.Name, c.Ready, c.RestartCount)
+		}
+	}
 }
 
 func computeContainerResourceUsage(name string, oldStats, newStats *cadvisorapi.ContainerStats) *containerResourceUsage {
@@ -586,7 +575,7 @@ func (r *resourceMonitor) LogLatest() {
 	if err != nil {
 		Logf("%v", err)
 	}
-	Logf(r.FormatResourceUsage(summary))
+	Logf("%s", r.FormatResourceUsage(summary))
 }
 
 func (r *resourceMonitor) FormatResourceUsage(s resourceUsagePerNode) string {
@@ -658,7 +647,7 @@ func (r *resourceMonitor) FormatCPUSummary(summary nodesCPUSummary) string {
 
 func (r *resourceMonitor) LogCPUSummary() {
 	summary := r.GetCPUSummary()
-	Logf(r.FormatCPUSummary(summary))
+	Logf("%s", r.FormatCPUSummary(summary))
 }
 
 func (r *resourceMonitor) GetCPUSummary() nodesCPUSummary {

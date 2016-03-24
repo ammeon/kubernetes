@@ -38,7 +38,6 @@ import (
 	deploymentutil "k8s.io/kubernetes/pkg/util/deployment"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/integer"
-	intstrutil "k8s.io/kubernetes/pkg/util/intstr"
 	labelsutil "k8s.io/kubernetes/pkg/util/labels"
 	podutil "k8s.io/kubernetes/pkg/util/pod"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
@@ -310,7 +309,7 @@ func (dc *DeploymentController) addPod(obj interface{}) {
 	if !ok {
 		return
 	}
-	glog.V(4).Infof("Pod %s created.", pod.Name)
+	glog.V(4).Infof("Pod %s created: %+v.", pod.Name, pod)
 	if d := dc.getDeploymentForPod(pod); d != nil {
 		dc.enqueueDeployment(d)
 	}
@@ -324,11 +323,11 @@ func (dc *DeploymentController) updatePod(old, cur interface{}) {
 		return
 	}
 	curPod := cur.(*api.Pod)
-	glog.V(4).Infof("Pod %s updated.", curPod.Name)
+	oldPod := old.(*api.Pod)
+	glog.V(4).Infof("Pod %s updated %+v -> %+v.", curPod.Name, oldPod, curPod)
 	if d := dc.getDeploymentForPod(curPod); d != nil {
 		dc.enqueueDeployment(d)
 	}
-	oldPod := old.(*api.Pod)
 	if !api.Semantic.DeepEqual(oldPod, curPod) {
 		if oldD := dc.getDeploymentForPod(oldPod); oldD != nil {
 			dc.enqueueDeployment(oldD)
@@ -357,7 +356,7 @@ func (dc *DeploymentController) deletePod(obj interface{}) {
 			return
 		}
 	}
-	glog.V(4).Infof("Pod %s deleted.", pod.Name)
+	glog.V(4).Infof("Pod %s deleted: %+v.", pod.Name, pod)
 	if d := dc.getDeploymentForPod(pod); d != nil {
 		dc.enqueueDeployment(d)
 	}
@@ -428,7 +427,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
 
 	if d.Spec.Paused {
 		// TODO: Implement scaling for paused deployments.
-		// Dont take any action for paused deployment.
+		// Don't take any action for paused deployment.
 		// But keep the status up-to-date.
 		// Ignore paused deployments
 		glog.V(4).Infof("Updating status only for paused deployment %s/%s", d.Namespace, d.Name)
@@ -731,7 +730,7 @@ func (dc *DeploymentController) getNewReplicaSet(deployment *extensions.Deployme
 		Spec: extensions.ReplicaSetSpec{
 			Replicas: 0,
 			Selector: newRSSelector,
-			Template: &newRSTemplate,
+			Template: newRSTemplate,
 		},
 	}
 	// Set new replica set's annotation
@@ -843,7 +842,7 @@ func (dc *DeploymentController) reconcileOldReplicaSets(allRSs []*extensions.Rep
 		return false, fmt.Errorf("could not find available pods: %v", err)
 	}
 
-	maxUnavailable, err := intstrutil.GetValueFromIntOrPercent(&deployment.Spec.Strategy.RollingUpdate.MaxUnavailable, deployment.Spec.Replicas, false)
+	_, maxUnavailable, err := deploymentutil.ResolveFenceposts(&deployment.Spec.Strategy.RollingUpdate.MaxSurge, &deployment.Spec.Strategy.RollingUpdate.MaxUnavailable, deployment.Spec.Replicas)
 	if err != nil {
 		return false, err
 	}
@@ -887,29 +886,32 @@ func (dc *DeploymentController) reconcileOldReplicaSets(allRSs []*extensions.Rep
 
 	// Clean up unhealthy replicas first, otherwise unhealthy replicas will block deployment
 	// and cause timeout. See https://github.com/kubernetes/kubernetes/issues/16737
-	cleanupCount, err := dc.cleanupUnhealthyReplicas(oldRSs, deployment, maxScaledDown)
+	oldRSs, cleanupCount, err := dc.cleanupUnhealthyReplicas(oldRSs, deployment, maxScaledDown)
 	if err != nil {
 		return false, nil
 	}
+	glog.V(4).Infof("Cleaned up unhealthy replicas from old RSes by %d", cleanupCount)
 
 	// Scale down old replica sets, need check maxUnavailable to ensure we can scale down
+	allRSs = append(oldRSs, newRS)
 	scaledDownCount, err := dc.scaleDownOldReplicaSetsForRollingUpdate(allRSs, oldRSs, deployment)
 	if err != nil {
 		return false, nil
 	}
+	glog.V(4).Infof("Scaled down old RSes by %d", scaledDownCount)
 
 	totalScaledDown := cleanupCount + scaledDownCount
 	return totalScaledDown > 0, nil
 }
 
 // cleanupUnhealthyReplicas will scale down old replica sets with unhealthy replicas, so that all unhealthy replicas will be deleted.
-func (dc *DeploymentController) cleanupUnhealthyReplicas(oldRSs []*extensions.ReplicaSet, deployment *extensions.Deployment, maxCleanupCount int) (int, error) {
+func (dc *DeploymentController) cleanupUnhealthyReplicas(oldRSs []*extensions.ReplicaSet, deployment *extensions.Deployment, maxCleanupCount int) ([]*extensions.ReplicaSet, int, error) {
 	sort.Sort(controller.ReplicaSetsByCreationTimestamp(oldRSs))
 	// Safely scale down all old replica sets with unhealthy replicas. Replica set will sort the pods in the order
 	// such that not-ready < ready, unscheduled < scheduled, and pending < running. This ensures that unhealthy replicas will
 	// been deleted first and won't increase unavailability.
 	totalScaledDown := 0
-	for _, targetRS := range oldRSs {
+	for i, targetRS := range oldRSs {
 		if totalScaledDown >= maxCleanupCount {
 			break
 		}
@@ -919,7 +921,7 @@ func (dc *DeploymentController) cleanupUnhealthyReplicas(oldRSs []*extensions.Re
 		}
 		readyPodCount, err := deploymentutil.GetAvailablePodsForReplicaSets(dc.client, []*extensions.ReplicaSet{targetRS}, 0)
 		if err != nil {
-			return totalScaledDown, fmt.Errorf("could not find available pods: %v", err)
+			return nil, totalScaledDown, fmt.Errorf("could not find available pods: %v", err)
 		}
 		if targetRS.Spec.Replicas == readyPodCount {
 			// no unhealthy replicas found, no scaling required.
@@ -928,19 +930,23 @@ func (dc *DeploymentController) cleanupUnhealthyReplicas(oldRSs []*extensions.Re
 
 		scaledDownCount := integer.IntMin(maxCleanupCount-totalScaledDown, targetRS.Spec.Replicas-readyPodCount)
 		newReplicasCount := targetRS.Spec.Replicas - scaledDownCount
-		_, _, err = dc.scaleReplicaSetAndRecordEvent(targetRS, newReplicasCount, deployment)
+		if newReplicasCount > targetRS.Spec.Replicas {
+			return nil, 0, fmt.Errorf("when cleaning up unhealthy replicas, got invalid request to scale down %s/%s %d -> %d", targetRS.Namespace, targetRS.Name, targetRS.Spec.Replicas, newReplicasCount)
+		}
+		_, updatedOldRS, err := dc.scaleReplicaSetAndRecordEvent(targetRS, newReplicasCount, deployment)
 		if err != nil {
-			return totalScaledDown, err
+			return nil, totalScaledDown, err
 		}
 		totalScaledDown += scaledDownCount
+		oldRSs[i] = updatedOldRS
 	}
-	return totalScaledDown, nil
+	return oldRSs, totalScaledDown, nil
 }
 
 // scaleDownOldReplicaSetsForRollingUpdate scales down old replica sets when deployment strategy is "RollingUpdate".
 // Need check maxUnavailable to ensure availability
 func (dc *DeploymentController) scaleDownOldReplicaSetsForRollingUpdate(allRSs []*extensions.ReplicaSet, oldRSs []*extensions.ReplicaSet, deployment *extensions.Deployment) (int, error) {
-	maxUnavailable, err := intstrutil.GetValueFromIntOrPercent(&deployment.Spec.Strategy.RollingUpdate.MaxUnavailable, deployment.Spec.Replicas, false)
+	_, maxUnavailable, err := deploymentutil.ResolveFenceposts(&deployment.Spec.Strategy.RollingUpdate.MaxSurge, &deployment.Spec.Strategy.RollingUpdate.MaxUnavailable, deployment.Spec.Replicas)
 	if err != nil {
 		return 0, err
 	}
@@ -974,6 +980,9 @@ func (dc *DeploymentController) scaleDownOldReplicaSetsForRollingUpdate(allRSs [
 		// Scale down.
 		scaleDownCount := integer.IntMin(targetRS.Spec.Replicas, totalScaleDownCount-totalScaledDown)
 		newReplicasCount := targetRS.Spec.Replicas - scaleDownCount
+		if newReplicasCount > targetRS.Spec.Replicas {
+			return 0, fmt.Errorf("when scaling down old RS, got invalid request to scale down %s/%s %d -> %d", targetRS.Namespace, targetRS.Name, targetRS.Spec.Replicas, newReplicasCount)
+		}
 		_, _, err = dc.scaleReplicaSetAndRecordEvent(targetRS, newReplicasCount, deployment)
 		if err != nil {
 			return totalScaledDown, err
@@ -1101,9 +1110,9 @@ func (dc *DeploymentController) updateDeployment(deployment *extensions.Deployme
 }
 
 func (dc *DeploymentController) rollbackToTemplate(deployment *extensions.Deployment, rs *extensions.ReplicaSet) (d *extensions.Deployment, performedRollback bool, err error) {
-	if !reflect.DeepEqual(deploymentutil.GetNewReplicaSetTemplate(deployment), *rs.Spec.Template) {
+	if !reflect.DeepEqual(deploymentutil.GetNewReplicaSetTemplate(deployment), rs.Spec.Template) {
 		glog.Infof("Rolling back deployment %s to template spec %+v", deployment.Name, rs.Spec.Template.Spec)
-		deploymentutil.SetFromReplicaSetTemplate(deployment, *rs.Spec.Template)
+		deploymentutil.SetFromReplicaSetTemplate(deployment, rs.Spec.Template)
 		performedRollback = true
 	} else {
 		glog.V(4).Infof("Rolling back to a revision that contains the same template as current deployment %s, skipping rollback...", deployment.Name)

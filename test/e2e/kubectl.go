@@ -464,7 +464,7 @@ var _ = Describe("Kubectl client", func() {
 				withStdinData("abcd1234\n").
 				execOrDie()
 			Expect(runOutput).ToNot(ContainSubstring("stdin closed"))
-			runTestPod, err := util.GetFirstPod(c, ns, labels.SelectorFromSet(map[string]string{"run": "run-test-3"}))
+			runTestPod, _, err := util.GetFirstPod(c, ns, labels.SelectorFromSet(map[string]string{"run": "run-test-3"}))
 			if err != nil {
 				os.Exit(1)
 			}
@@ -613,7 +613,7 @@ var _ = Describe("Kubectl client", func() {
 				{"Selector:", "app=redis", "role=master"},
 				{"Type:", "ClusterIP"},
 				{"IP:"},
-				{"Port:", "<unnamed>", "6379/TCP"},
+				{"Port:", "<unset>", "6379/TCP"},
 				{"Endpoints:"},
 				{"Session Affinity:", "None"}}
 			checkOutput(output, requiredStrings)
@@ -861,6 +861,48 @@ var _ = Describe("Kubectl client", func() {
 		})
 	})
 
+	Describe("Kubectl run default", func() {
+		var nsFlag string
+		var name string
+
+		var cleanUp func()
+
+		BeforeEach(func() {
+			nsFlag = fmt.Sprintf("--namespace=%v", ns)
+			gte, err := serverVersionGTE(deploymentsVersion, c)
+			if err != nil {
+				Failf("Failed to get server version: %v", err)
+			}
+			if gte {
+				name = "e2e-test-nginx-deployment"
+				cleanUp = func() { runKubectlOrDie("delete", "deployment", name, nsFlag) }
+			} else {
+				name = "e2e-test-nginx-rc"
+				cleanUp = func() { runKubectlOrDie("delete", "rc", name, nsFlag) }
+			}
+		})
+
+		AfterEach(func() {
+			cleanUp()
+		})
+
+		It("should create an rc or deployment from an image [Conformance]", func() {
+			By("running the image " + nginxImage)
+			runKubectlOrDie("run", name, "--image="+nginxImage, nsFlag)
+			By("verifying the pod controlled by " + name + " gets created")
+			label := labels.SelectorFromSet(labels.Set(map[string]string{"run": name}))
+			podlist, err := waitForPodsWithLabel(c, ns, label)
+			if err != nil {
+				Failf("Failed getting pod controlled by %s: %v", name, err)
+			}
+			pods := podlist.Items
+			if pods == nil || len(pods) != 1 || len(pods[0].Spec.Containers) != 1 || pods[0].Spec.Containers[0].Image != nginxImage {
+				runKubectlOrDie("get", "pods", "-L", "run", nsFlag)
+				Failf("Failed creating 1 pod with expected image %s. Number of pods = %v", nginxImage, len(pods))
+			}
+		})
+	})
+
 	Describe("Kubectl run rc", func() {
 		var nsFlag string
 		var rcName string
@@ -898,8 +940,21 @@ var _ = Describe("Kubectl client", func() {
 				runKubectlOrDie("get", "pods", "-L", "run", nsFlag)
 				Failf("Failed creating 1 pod with expected image %s. Number of pods = %v", nginxImage, len(pods))
 			}
-		})
 
+			By("confirm that you can get logs from an rc")
+			podNames := []string{}
+			for _, pod := range pods {
+				podNames = append(podNames, pod.Name)
+			}
+			if !checkPodsRunningReady(c, ns, podNames, podStartTimeout) {
+				Failf("Pods for rc %s were not ready", rcName)
+			}
+			_, err = runKubectl("logs", "rc/"+rcName, nsFlag)
+			// a non-nil error is fine as long as we actually found a pod.
+			if err != nil && !strings.Contains(err.Error(), " in pod ") {
+				Failf("Failed getting logs by rc %s: %v", rcName, err)
+			}
+		})
 	})
 
 	Describe("Kubectl run deployment", func() {
@@ -919,7 +974,7 @@ var _ = Describe("Kubectl client", func() {
 			SkipUnlessServerVersionGTE(deploymentsVersion, c)
 
 			By("running the image " + nginxImage)
-			runKubectlOrDie("run", dName, "--image="+nginxImage, nsFlag)
+			runKubectlOrDie("run", dName, "--image="+nginxImage, "--generator=deployment/v1beta1", nsFlag)
 			By("verifying the deployment " + dName + " was created")
 			d, err := c.Extensions().Deployments(ns).Get(dName)
 			if err != nil {
@@ -942,7 +997,6 @@ var _ = Describe("Kubectl client", func() {
 				Failf("Failed creating 1 pod with expected image %s. Number of pods = %v", nginxImage, len(pods))
 			}
 		})
-
 	})
 
 	Describe("Kubectl run job", func() {
@@ -995,7 +1049,6 @@ var _ = Describe("Kubectl client", func() {
 				Failf("Failed creating a job with correct restart policy for --restart=OnFailure")
 			}
 		})
-
 	})
 
 	Describe("Kubectl run --rm job", func() {

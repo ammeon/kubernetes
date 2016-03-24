@@ -16,17 +16,21 @@
 
 # TODO(jbeda): Provide a way to override project
 # gcloud multiplexing for shared GCE/GKE tests.
+KUBE_ROOT=$(dirname "${BASH_SOURCE}")/../..
+source "${KUBE_ROOT}/cluster/gce/config-common.sh"
+
 GCLOUD=gcloud
 ZONE=${KUBE_GCE_ZONE:-us-central1-b}
 RELEASE_REGION_FALLBACK=${RELEASE_REGION_FALLBACK:-false}
-MASTER_SIZE=${MASTER_SIZE:-n1-standard-2}
+REGIONAL_KUBE_ADDONS=${REGIONAL_KUBE_ADDONS:-true}
 NODE_SIZE=${NODE_SIZE:-n1-standard-2}
 NUM_NODES=${NUM_NODES:-3}
+MASTER_SIZE=${MASTER_SIZE:-n1-standard-$(get-master-size)}
 MASTER_DISK_TYPE=pd-ssd
 MASTER_DISK_SIZE=${MASTER_DISK_SIZE:-20GB}
 NODE_DISK_TYPE=${NODE_DISK_TYPE:-pd-standard}
 NODE_DISK_SIZE=${NODE_DISK_SIZE:-100GB}
-REGISTER_MASTER_KUBELET=${REGISTER_MASTER:-false}
+REGISTER_MASTER_KUBELET=${REGISTER_MASTER:-true}
 PREEMPTIBLE_NODE=${PREEMPTIBLE_NODE:-false}
 PREEMPTIBLE_MASTER=${PREEMPTIBLE_MASTER:-false}
 
@@ -41,12 +45,16 @@ RKT_VERSION=${KUBE_RKT_VERSION:-0.5.5}
 
 NETWORK=${KUBE_GCE_NETWORK:-default}
 INSTANCE_PREFIX="${KUBE_GCE_INSTANCE_PREFIX:-kubernetes}"
+CLUSTER_NAME="${CLUSTER_NAME:-${INSTANCE_PREFIX}}"
 MASTER_NAME="${INSTANCE_PREFIX}-master"
 MASTER_TAG="${INSTANCE_PREFIX}-master"
 NODE_TAG="${INSTANCE_PREFIX}-minion"
 MASTER_IP_RANGE="${MASTER_IP_RANGE:-10.246.0.0/24}"
 CLUSTER_IP_RANGE="${CLUSTER_IP_RANGE:-10.244.0.0/16}"
 NODE_SCOPES="${NODE_SCOPES:-compute-rw,monitoring,logging-write,storage-ro}"
+
+# Extra docker options for nodes.
+EXTRA_DOCKER_OPTS="${EXTRA_DOCKER_OPTS:-}"
 
 # Increase the sleep interval value if concerned about API rate limits. 3, in seconds, is the default.
 POLL_SLEEP_INTERVAL="${POLL_SLEEP_INTERVAL:-3}"
@@ -75,7 +83,7 @@ ELASTICSEARCH_LOGGING_REPLICAS=1
 
 # Optional: Don't require https for registries in our local RFC1918 network
 if [[ ${KUBE_ENABLE_INSECURE_REGISTRY:-false} == "true" ]]; then
-  EXTRA_DOCKER_OPTS="--insecure-registry 10.0.0.0/8"
+  EXTRA_DOCKER_OPTS="${EXTRA_DOCKER_OPTS} --insecure-registry 10.0.0.0/8"
 fi
 
 # Optional: customize runtime config

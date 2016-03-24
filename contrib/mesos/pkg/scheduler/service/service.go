@@ -134,10 +134,11 @@ type SchedulerServer struct {
 	launchGracePeriod              time.Duration
 	kubeletEnableDebuggingHandlers bool
 
-	runProxy     bool
-	proxyBindall bool
-	proxyLogV    int
-	proxyMode    string
+	runProxy        bool
+	proxyBindall    bool
+	proxyKubeconfig string
+	proxyLogV       int
+	proxyMode       string
 
 	minionPathOverride    string
 	minionLogMaxSize      resource.Quantity
@@ -162,6 +163,7 @@ type SchedulerServer struct {
 	kmPath                         string
 	clusterDNS                     net.IP
 	clusterDomain                  string
+	kubeletApiServerList           []string
 	kubeletRootDirectory           string
 	kubeletDockerEndpoint          string
 	kubeletPodInfraContainerImage  string
@@ -169,6 +171,7 @@ type SchedulerServer struct {
 	kubeletHostNetworkSources      string
 	kubeletSyncFrequency           time.Duration
 	kubeletNetworkPluginName       string
+	kubeletKubeconfig              string
 	staticPodsConfigPath           string
 	dockerCfgPath                  string
 	containPodResources            bool
@@ -258,7 +261,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.IPVar(&s.address, "address", s.address, "The IP address to serve on (set to 0.0.0.0 for all interfaces)")
 	fs.BoolVar(&s.enableProfiling, "profiling", s.enableProfiling, "Enable profiling via web interface host:port/debug/pprof/")
 	fs.StringSliceVar(&s.apiServerList, "api-servers", s.apiServerList, "List of Kubernetes API servers for publishing events, and reading pods and services. (ip:port), comma separated.")
-	fs.StringVar(&s.kubeconfig, "kubeconfig", s.kubeconfig, "Path to kubeconfig file with authorization and master location information.")
+	fs.StringVar(&s.kubeconfig, "kubeconfig", s.kubeconfig, "Path to kubeconfig file with authorization and master location information used by the scheduler.")
 	fs.Float32Var(&s.kubeAPIQPS, "kube-api-qps", s.kubeAPIQPS, "QPS to use while talking with kubernetes apiserver")
 	fs.IntVar(&s.kubeAPIBurst, "kube-api-burst", s.kubeAPIBurst, "Burst to use while talking with kubernetes apiserver")
 	fs.StringSliceVar(&s.etcdServerList, "etcd-servers", s.etcdServerList, "List of etcd servers to watch (http://ip:port), comma separated.")
@@ -307,6 +310,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 
 	fs.BoolVar(&s.proxyBindall, "proxy-bindall", s.proxyBindall, "When true pass -proxy-bindall to the executor.")
 	fs.BoolVar(&s.runProxy, "run-proxy", s.runProxy, "Run the kube-proxy as a side process of the executor.")
+	fs.StringVar(&s.proxyKubeconfig, "proxy-kubeconfig", s.proxyKubeconfig, "Path to kubeconfig file with authorization and master location information used by the proxy.")
 	fs.IntVar(&s.proxyLogV, "proxy-logv", s.proxyLogV, "Logging verbosity of spawned minion proxy processes.")
 	fs.StringVar(&s.proxyMode, "proxy-mode", s.proxyMode, "Which proxy mode to use: 'userspace' (older) or 'iptables' (faster). If the iptables proxy is selected, regardless of how, but the system's kernel or iptables versions are insufficient, this always falls back to the userspace proxy.")
 
@@ -315,6 +319,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.minionLogMaxAgeInDays, "minion-max-log-age", s.minionLogMaxAgeInDays, "Maximum log file age of the executor and proxy in days")
 	fs.IntVar(&s.minionLogMaxBackups, "minion-max-log-backups", s.minionLogMaxBackups, "Maximum log file backups of the executor and proxy to keep after rotation")
 
+	fs.StringSliceVar(&s.kubeletApiServerList, "kubelet-api-servers", s.kubeletApiServerList, "List of Kubernetes API servers kubelet will use. (ip:port), comma separated. If unspecified it defaults to the value of --api-servers.")
 	fs.StringVar(&s.kubeletRootDirectory, "kubelet-root-dir", s.kubeletRootDirectory, "Directory path for managing kubelet files (volume mounts,etc). Defaults to executor sandbox.")
 	fs.StringVar(&s.kubeletDockerEndpoint, "kubelet-docker-endpoint", s.kubeletDockerEndpoint, "If non-empty, kubelet will use this for the docker endpoint to communicate with.")
 	fs.StringVar(&s.kubeletPodInfraContainerImage, "kubelet-pod-infra-container-image", s.kubeletPodInfraContainerImage, "The image whose network/ipc namespaces containers in each pod will use.")
@@ -323,6 +328,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&s.kubeletSyncFrequency, "kubelet-sync-frequency", s.kubeletSyncFrequency, "Max period between synchronizing running containers and config")
 	fs.StringVar(&s.kubeletNetworkPluginName, "kubelet-network-plugin", s.kubeletNetworkPluginName, "<Warning: Alpha feature> The name of the network plugin to be invoked for various events in kubelet/pod lifecycle")
 	fs.BoolVar(&s.kubeletEnableDebuggingHandlers, "kubelet-enable-debugging-handlers", s.kubeletEnableDebuggingHandlers, "Enables kubelet endpoints for log collection and local running of containers and commands")
+	fs.StringVar(&s.kubeletKubeconfig, "kubelet-kubeconfig", s.kubeletKubeconfig, "Path to kubeconfig file with authorization and master location information used by the kubelet.")
 	fs.IntVar(&s.conntrackMax, "conntrack-max", s.conntrackMax, "Maximum number of NAT connections to track on agent nodes (0 to leave as-is)")
 	fs.IntVar(&s.conntrackTCPTimeoutEstablished, "conntrack-tcp-timeout-established", s.conntrackTCPTimeoutEstablished, "Idle timeout for established TCP connections on agent nodes (0 to leave as-is)")
 
@@ -401,6 +407,12 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--run-proxy=%v", s.runProxy))
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy-bindall=%v", s.proxyBindall))
+		if s.proxyKubeconfig != "" {
+			//TODO(jdef) should probably support non-local files, e.g. hdfs:///some/config/file
+			uri, basename := s.serveFrameworkArtifact(s.proxyKubeconfig)
+			ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
+			ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy-kubeconfig=%v", basename))
+		}
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy-logv=%d", s.proxyLogV))
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy-mode=%v", s.proxyMode))
 
@@ -428,7 +440,12 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 	//TODO(jdef): provide some way (env var?) for users to customize executor config
 	//TODO(jdef): set -address to 127.0.0.1 if `address` is 127.0.0.1
 
-	apiServerArgs := strings.Join(s.apiServerList, ",")
+	var apiServerArgs string
+	if len(s.kubeletApiServerList) > 0 {
+		apiServerArgs = strings.Join(s.kubeletApiServerList, ",")
+	} else {
+		apiServerArgs = strings.Join(s.apiServerList, ",")
+	}
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--api-servers=%s", apiServerArgs))
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--v=%d", s.executorLogV)) // this also applies to the minion
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--allow-privileged=%t", s.allowPrivileged))
@@ -448,11 +465,20 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--contain-pod-resources=%t", s.containPodResources))
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--enable-debugging-handlers=%t", s.kubeletEnableDebuggingHandlers))
 
-	if s.kubeconfig != "" {
+	if s.kubeletKubeconfig != "" {
 		//TODO(jdef) should probably support non-local files, e.g. hdfs:///some/config/file
-		uri, basename := s.serveFrameworkArtifact(s.kubeconfig)
-		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--kubeconfig=%s", basename))
+		if s.kubeletKubeconfig != s.proxyKubeconfig {
+			if filepath.Base(s.kubeletKubeconfig) == filepath.Base(s.proxyKubeconfig) {
+				// scheduler serves kubelet-kubeconfig and proxy-kubeconfig by their basename
+				// we currently don't support the case where the 2 kubeconfig files have the same
+				// basename but different absolute name, e.g., /kubelet/kubeconfig and /proxy/kubeconfig
+				return nil, fmt.Errorf("if kubelet-kubeconfig and proxy-kubeconfig are different, they must have different basenames")
+			}
+			// allows kubelet-kubeconfig and proxy-kubeconfig to point to the same file
+			uri, _ := s.serveFrameworkArtifact(s.kubeletKubeconfig)
+			ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
+		}
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--kubeconfig=%s", filepath.Base(s.kubeletKubeconfig)))
 	}
 	appendOptional := func(name string, value string) {
 		if value != "" {
@@ -751,10 +777,18 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 	nodeLW := cache.NewListWatchFromClient(nodesClient.CoreClient, "nodes", api.NamespaceAll, fields.Everything())
 	nodeStore, nodeCtl := controllerfw.NewInformer(nodeLW, &api.Node{}, s.nodeRelistPeriod, &controllerfw.ResourceEventHandlerFuncs{
 		DeleteFunc: func(obj interface{}) {
-			node := obj.(*api.Node)
 			if eiRegistry != nil {
-				log.V(2).Infof("deleting node %q from registry", node.Name)
-				eiRegistry.Invalidate(node.Name)
+				// TODO(jdef) use controllerfw.DeletionHandlingMetaNamespaceKeyFunc at some point?
+				nodeName := ""
+				if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					nodeName = tombstone.Key
+				} else if node, ok := obj.(*api.Node); ok {
+					nodeName = node.Name
+				}
+				if nodeName != "" {
+					log.V(2).Infof("deleting node %q from registry", nodeName)
+					eiRegistry.Invalidate(nodeName)
+				}
 			}
 		},
 	})
@@ -923,7 +957,7 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks hyperkub
 	// signals, so we'll need to restart if we want to really stop everything
 
 	// run the same command that we were launched with
-	//TODO(jdef) assumption here is that the sheduler is the only service running in this process, we should probably validate that somehow
+	//TODO(jdef) assumption here is that the scheduler is the only service running in this process, we should probably validate that somehow
 	args := []string{}
 	flags := pflag.CommandLine
 	if hks != nil {
@@ -931,7 +965,7 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks hyperkub
 		flags = hks.Flags()
 	}
 	flags.Visit(func(flag *pflag.Flag) {
-		if flag.Name != "api-servers" && flag.Name != "etcd-servers" {
+		if flag.Name != "api-servers" && flag.Name != "etcd-servers" && flag.Name != "kubelet-api-servers" {
 			args = append(args, fmt.Sprintf("--%s=%s", flag.Name, flag.Value.String()))
 		}
 	})
@@ -943,6 +977,9 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks hyperkub
 	}
 	if len(s.etcdServerList) > 0 {
 		args = append(args, "--etcd-servers="+strings.Join(s.etcdServerList, ","))
+	}
+	if len(s.kubeletApiServerList) > 0 {
+		args = append(args, "--kubelet-api-servers="+strings.Join(s.kubeletApiServerList, ","))
 	}
 	args = append(args, flags.Args()...)
 

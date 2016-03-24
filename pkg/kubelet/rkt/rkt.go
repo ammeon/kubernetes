@@ -94,6 +94,11 @@ const (
 	// hence, setting ndots to be 5.
 	// TODO(yifan): Move this and dockertools.ndotsDNSOption to a common package.
 	defaultDNSOption = "ndots:5"
+
+	// Annotations for the ENTRYPOINT and CMD for an ACI that's converted from Docker image.
+	// TODO(yifan): Import them from docker2aci. See https://github.com/appc/docker2aci/issues/133.
+	appcDockerEntrypoint = "appc.io/docker/entrypoint"
+	appcDockerCmd        = "appc.io/docker/cmd"
 )
 
 // Runtime implements the Containerruntime for rkt. The implementation
@@ -184,13 +189,6 @@ func New(config *Config,
 		rkt.imagePuller = kubecontainer.NewImagePuller(recorder, rkt, imageBackOff)
 	}
 
-	if err := rkt.checkVersion(minimumRktBinVersion, recommendedRktBinVersion, minimumAppcVersion, minimumRktApiVersion, minimumSystemdVersion); err != nil {
-		// TODO(yifan): Latest go-systemd version have the ability to close the
-		// dbus connection. However the 'docker/libcontainer' package is using
-		// the older go-systemd version, so we can't update the go-systemd version.
-		rkt.apisvcConn.Close()
-		return nil, err
-	}
 	return rkt, nil
 }
 
@@ -421,10 +419,29 @@ func setSupplementaryGIDs(app *appctypes.App, podCtx *api.PodSecurityContext) {
 }
 
 // setApp merges the container spec with the image's manifest.
-func setApp(app *appctypes.App, c *api.Container, opts *kubecontainer.RunContainerOptions, ctx *api.SecurityContext, podCtx *api.PodSecurityContext) error {
-	// TODO(yifan): If ENTRYPOINT and CMD are both specified in the image,
-	// we cannot override just one of these at this point as they are already mixed.
-	command, args := kubecontainer.ExpandContainerCommandAndArgs(c, opts.Envs)
+func setApp(imgManifest *appcschema.ImageManifest, c *api.Container, opts *kubecontainer.RunContainerOptions, ctx *api.SecurityContext, podCtx *api.PodSecurityContext) error {
+	app := imgManifest.App
+
+	// Set up Exec.
+	var command, args []string
+	cmd, ok := imgManifest.Annotations.Get(appcDockerEntrypoint)
+	if ok {
+		command = strings.Fields(cmd)
+	}
+	ag, ok := imgManifest.Annotations.Get(appcDockerCmd)
+	if ok {
+		args = strings.Fields(ag)
+	}
+	userCommand, userArgs := kubecontainer.ExpandContainerCommandAndArgs(c, opts.Envs)
+
+	if len(userCommand) > 0 {
+		command = userCommand
+		args = nil // If 'command' is specified, then drop the default args.
+	}
+	if len(userArgs) > 0 {
+		args = userArgs
+	}
+
 	exec := append(command, args...)
 	if len(exec) > 0 {
 		app.Exec = exec
@@ -586,7 +603,8 @@ func (r *Runtime) newAppcRuntimeApp(pod *api.Pod, c api.Container, pullSecrets [
 		return err
 	}
 
-	opts, err := r.runtimeHelper.GenerateRunContainerOptions(pod, &c)
+	// TODO: determine how this should be handled for rkt
+	opts, err := r.runtimeHelper.GenerateRunContainerOptions(pod, &c, "")
 	if err != nil {
 		return err
 	}
@@ -598,7 +616,7 @@ func (r *Runtime) newAppcRuntimeApp(pod *api.Pod, c api.Container, pullSecrets [
 	}
 
 	ctx := securitycontext.DetermineEffectiveSecurityContext(pod, &c)
-	if err := setApp(imgManifest.App, &c, opts, ctx, pod.Spec.SecurityContext); err != nil {
+	if err := setApp(imgManifest, &c, opts, ctx, pod.Spec.SecurityContext); err != nil {
 		return err
 	}
 
@@ -1004,16 +1022,33 @@ func (r *Runtime) GetPods(all bool) ([]*kubecontainer.Pod, error) {
 		return nil, fmt.Errorf("couldn't list pods: %v", err)
 	}
 
-	var pods []*kubecontainer.Pod
+	pods := make(map[types.UID]*kubecontainer.Pod)
+	var podIDs []types.UID
 	for _, pod := range listResp.Pods {
 		pod, err := r.convertRktPod(pod)
 		if err != nil {
 			glog.Warningf("rkt: Cannot construct pod from unit file: %v.", err)
 			continue
 		}
-		pods = append(pods, pod)
+
+		// Group pods together.
+		oldPod, found := pods[pod.ID]
+		if !found {
+			pods[pod.ID] = pod
+			podIDs = append(podIDs, pod.ID)
+			continue
+		}
+
+		oldPod.Containers = append(oldPod.Containers, pod.Containers...)
 	}
-	return pods, nil
+
+	// Convert map to list, using the consistent order from the podIDs array.
+	var result []*kubecontainer.Pod
+	for _, id := range podIDs {
+		result = append(result, pods[id])
+	}
+
+	return result, nil
 }
 
 // KillPod invokes 'systemctl kill' to kill the unit that runs the pod.
@@ -1062,7 +1097,12 @@ func (r *Runtime) Version() (kubecontainer.Version, error) {
 }
 
 func (r *Runtime) APIVersion() (kubecontainer.Version, error) {
-	return r.binVersion, nil
+	return r.apiVersion, nil
+}
+
+// Status returns error if rkt is unhealthy, nil otherwise.
+func (r *Runtime) Status() error {
+	return r.checkVersion(minimumRktBinVersion, recommendedRktBinVersion, minimumAppcVersion, minimumRktApiVersion, minimumSystemdVersion)
 }
 
 // SyncPod syncs the running pod to match the specified desired pod.
@@ -1483,9 +1523,3 @@ func (r *Runtime) GetPodStatus(uid types.UID, name, namespace string) (*kubecont
 
 	return podStatus, nil
 }
-
-type sortByRestartCount []*kubecontainer.ContainerStatus
-
-func (s sortByRestartCount) Len() int           { return len(s) }
-func (s sortByRestartCount) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s sortByRestartCount) Less(i, j int) bool { return s[i].RestartCount < s[j].RestartCount }

@@ -77,8 +77,6 @@ function set-broken-motd() {
 function reset-motd() {
   # kubelet is installed both on the master and nodes, and the version is easy to parse (unlike kubectl)
   local -r version="$(/usr/local/bin/kubelet --version=true | cut -f2 -d " ")"
-  # This regex grabs the minor version, e.g. v1.2.
-  local -r minor="$(echo ${version} | sed -r "s/(v[0-9]+\.[0-9]+).*/\1/g")"
   # This logic grabs either a release tag (v1.2.1 or v1.2.1-alpha.1),
   # or the git hash that's in the build info.
   local gitref="$(echo "${version}" | sed -r "s/(v[0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.[0-9]+)?.*/\1\2/g")"
@@ -95,8 +93,8 @@ If it isn't, the closest tag is at:
 
 Welcome to Kubernetes ${version}!
 
-You can find documentation for this release at:
-  http://kubernetes.io/${minor}/
+You can find documentation for Kubernetes at:
+  http://docs.kubernetes.io/
 
 You can download the build image for this release at:
   https://storage.googleapis.com/kubernetes-release/release/${version}/kubernetes-src.tar.gz
@@ -104,6 +102,9 @@ You can download the build image for this release at:
 It is based on the Kubernetes source at:
   https://github.com/kubernetes/kubernetes/tree/${gitref}
 ${devel}
+For Kubernetes copyright and licensing information, see:
+  /usr/local/share/doc/kubernetes/LICENSES
+
 EOF
 }
 
@@ -462,6 +463,11 @@ EOF
     if [ -n "${KUBELET_TEST_LOG_LEVEL:-}" ]; then
       cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
 kubelet_test_log_level: '$(echo "$KUBELET_TEST_LOG_LEVEL" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${DOCKER_TEST_LOG_LEVEL:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+docker_test_log_level: '$(echo "$DOCKER_TEST_LOG_LEVEL" | sed -e "s/'/''/g")'
 EOF
     fi
     if [ -n "${CONTROLLER_MANAGER_TEST_ARGS:-}" ]; then

@@ -70,8 +70,9 @@ func (g *genClientset) Imports(c *generator.Context) (imports []string) {
 	// imports for the code in commonTemplate
 	imports = append(imports,
 		"k8s.io/kubernetes/pkg/api",
+		"k8s.io/kubernetes/pkg/apimachinery/registered",
 		"k8s.io/kubernetes/pkg/client/testing/core",
-		"k8s.io/kubernetes/pkg/client/unversioned",
+		"k8s.io/kubernetes/pkg/client/typed/discovery",
 		"k8s.io/kubernetes/pkg/runtime",
 		"k8s.io/kubernetes/pkg/watch",
 	)
@@ -118,7 +119,7 @@ func NewSimpleClientset(objects ...runtime.Object) *Clientset {
 	}
 
 	fakePtr := core.Fake{}
-	fakePtr.AddReactor("*", "*", core.ObjectReaction(o, api.RESTMapper))
+	fakePtr.AddReactor("*", "*", core.ObjectReaction(o, registered.RESTMapper()))
 
 	fakePtr.AddWatchReactor("*", core.DefaultWatchReactor(watch.NewFake(), nil))
 
@@ -132,7 +133,7 @@ type Clientset struct {
 	core.Fake
 }
 
-func (c *Clientset) Discovery() unversioned.DiscoveryInterface {
+func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 	return &FakeDiscovery{&c.Fake}
 }
 `

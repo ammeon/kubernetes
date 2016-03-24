@@ -866,7 +866,8 @@ type VolumeMount struct {
 	// Mounted read-only if true, read-write otherwise (false or unspecified).
 	// Defaults to false.
 	ReadOnly bool `json:"readOnly,omitempty"`
-	// Path within the container at which the volume should be mounted.
+	// Path within the container at which the volume should be mounted.  Must
+	// not contain ':'.
 	MountPath string `json:"mountPath"`
 }
 
@@ -1677,6 +1678,9 @@ type ReplicationControllerStatus struct {
 	// Replicas is the most recently oberved number of replicas.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller
 	Replicas int32 `json:"replicas"`
+
+	// The number of pods that have labels matching the labels of the pod template of the replication controller.
+	FullyLabeledReplicas int32 `json:"fullyLabeledReplicas"`
 
 	// ObservedGeneration reflects the generation of the most recently observed replication controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -2643,6 +2647,8 @@ const (
 	ResourceQuotas ResourceName = "resourcequotas"
 	// ResourceSecrets, number
 	ResourceSecrets ResourceName = "secrets"
+	// ResourceConfigMaps, number
+	ResourceConfigMaps ResourceName = "configmaps"
 	// ResourcePersistentVolumeClaims, number
 	ResourcePersistentVolumeClaims ResourceName = "persistentvolumeclaims"
 	// CPU request, in cores. (500m = .5 cores)

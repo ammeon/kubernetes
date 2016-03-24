@@ -19,6 +19,7 @@ package stats
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
 	"k8s.io/kubernetes/pkg/kubelet/leaky"
+	"k8s.io/kubernetes/pkg/kubelet/network"
 	"k8s.io/kubernetes/pkg/types"
 
 	"github.com/golang/glog"
@@ -107,7 +109,7 @@ func (sb *summaryBuilder) build() (*stats.Summary, error) {
 		NodeName: sb.node.Name,
 		CPU:      rootStats.CPU,
 		Memory:   rootStats.Memory,
-		Network:  sb.containerInfoV2ToNetworkStats(&rootInfo),
+		Network:  sb.containerInfoV2ToNetworkStats("node:"+sb.node.Name, &rootInfo),
 		Fs: &stats.FsStats{
 			AvailableBytes: &sb.rootFsInfo.Available,
 			CapacityBytes:  &sb.rootFsInfo.Capacity,
@@ -183,7 +185,13 @@ func (sb *summaryBuilder) latestContainerStats(info *cadvisorapiv2.ContainerInfo
 func (sb *summaryBuilder) buildSummaryPods() []stats.PodStats {
 	// Map each container to a pod and update the PodStats with container data
 	podToStats := map[stats.PodReference]*stats.PodStats{}
-	for _, cinfo := range sb.infos {
+	for key, cinfo := range sb.infos {
+		// on systemd using devicemapper each mount into the container has an associated cgroup.
+		// we ignore them to ensure we do not get duplicate entries in our summary.
+		// for details on .mount units: http://man7.org/linux/man-pages/man5/systemd.mount.5.html
+		if strings.HasSuffix(key, ".mount") {
+			continue
+		}
 		// Build the Pod key if this container is managed by a Pod
 		if !sb.isPodManagedContainer(&cinfo) {
 			continue
@@ -201,7 +209,7 @@ func (sb *summaryBuilder) buildSummaryPods() []stats.PodStats {
 		containerName := dockertools.GetContainerName(cinfo.Spec.Labels)
 		if containerName == leaky.PodInfraContainerName {
 			// Special case for infrastructure container which is hidden from the user and has network stats
-			podStats.Network = sb.containerInfoV2ToNetworkStats(&cinfo)
+			podStats.Network = sb.containerInfoV2ToNetworkStats("pod:"+ref.Namespace+"_"+ref.Name, &cinfo)
 			podStats.StartTime = unversioned.NewTime(cinfo.Spec.CreationTime)
 		} else {
 			podStats.Containers = append(podStats.Containers, sb.containerInfoV2ToStats(containerName, &cinfo))
@@ -281,7 +289,7 @@ func (sb *summaryBuilder) containerInfoV2ToStats(
 	return cStats
 }
 
-func (sb *summaryBuilder) containerInfoV2ToNetworkStats(info *cadvisorapiv2.ContainerInfo) *stats.NetworkStats {
+func (sb *summaryBuilder) containerInfoV2ToNetworkStats(name string, info *cadvisorapiv2.ContainerInfo) *stats.NetworkStats {
 	if !info.Spec.HasNetwork {
 		return nil
 	}
@@ -289,26 +297,19 @@ func (sb *summaryBuilder) containerInfoV2ToNetworkStats(info *cadvisorapiv2.Cont
 	if !found {
 		return nil
 	}
-	var (
-		rxBytes  uint64
-		rxErrors uint64
-		txBytes  uint64
-		txErrors uint64
-	)
-	// TODO(stclair): check for overflow
 	for _, inter := range cstat.Network.Interfaces {
-		rxBytes += inter.RxBytes
-		rxErrors += inter.RxErrors
-		txBytes += inter.TxBytes
-		txErrors += inter.TxErrors
+		if inter.Name == network.DefaultInterfaceName {
+			return &stats.NetworkStats{
+				Time:     unversioned.NewTime(cstat.Timestamp),
+				RxBytes:  &inter.RxBytes,
+				RxErrors: &inter.RxErrors,
+				TxBytes:  &inter.TxBytes,
+				TxErrors: &inter.TxErrors,
+			}
+		}
 	}
-	return &stats.NetworkStats{
-		Time:     unversioned.NewTime(cstat.Timestamp),
-		RxBytes:  &rxBytes,
-		RxErrors: &rxErrors,
-		TxBytes:  &txBytes,
-		TxErrors: &txErrors,
-	}
+	glog.Warningf("Missing default interface %q for s", network.DefaultInterfaceName, name)
+	return nil
 }
 
 func (sb *summaryBuilder) containerInfoV2ToUserDefinedMetrics(info *cadvisorapiv2.ContainerInfo) []stats.UserDefinedMetric {

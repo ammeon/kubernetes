@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.1/docs/devel/e2e-tests.md).
+[here](http://releases.k8s.io/release-1.2/docs/devel/e2e-tests.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -148,6 +148,26 @@ As mentioned earlier there are a host of other options that are available, but t
 - `rm -rf /var/run/kubernetes`, clear kube generated credentials, sometimes stale permissions can cause problems.
 - `sudo iptables -F`, clear ip tables rules left by the kube-proxy.
 
+### Debugging clusters
+
+If a cluster fails to initialize, or you'd like to better understand cluster
+state to debug a failed e2e test, you can use the `cluster/log-dump.sh` script
+to gather logs.
+
+This script requires that the cluster provider supports ssh. Assuming it does,
+running
+
+```
+cluster/log-dump.sh <directory>
+````
+
+will ssh to the master and all nodes
+and download a variety of useful logs to the provided directory (which should
+already exist).
+
+The Google-run Jenkins builds automatically collected these logs for every
+build, saving them in the `artifacts` directory uploaded to GCS.
+
 ### Local clusters
 
 It can be much faster to iterate on a local cluster instead of a cloud-based one.  To start a local cluster, you can run:
@@ -193,6 +213,17 @@ Finally, `[Conformance]` tests are tests we expect to pass on **any** Kubernetes
 End-to-end testing, as described above, is for [development distributions](writing-a-getting-started-guide.md).  A conformance test is used on a [versioned distro](writing-a-getting-started-guide.md).  (Links WIP)
 
 The conformance test runs a subset of the e2e-tests against a manually-created cluster.  It does not require support for up/push/down and other operations.  To run a conformance test, you need to know the IP of the master for your cluster and the authorization arguments to use.  The conformance test is intended to run against a cluster at a specific binary release of Kubernetes.  See [conformance-test.sh](http://releases.k8s.io/HEAD/hack/conformance-test.sh).
+
+### Defining what Conformance means
+
+It is impossible to define the entire space of Conformance tests without knowing the future, so instead, we define the compliment of conformance tests, below.
+
+Please update this with companion PRs as necessary.
+
+ - A conformance test cannot test cloud provider specific features (i.e. GCE monitoring, S3 Bucketing, ...)
+ - A conformance test cannot rely on any particular non-standard file system permissions granted to containers or users (i.e. sharing writable host /tmp with a container)
+ - A conformance test cannot rely on any binaries that are not required for the linux kernel or for a kubelet to run (i.e. git)
+ - A conformance test cannot test a feature which obviously cannot be supported on a broad range of platforms (i.e. testing of multiple disk mounts, GPUs, high density)
 
 ## Continuous Integration
 

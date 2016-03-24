@@ -40,6 +40,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/leaderelection"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	"k8s.io/kubernetes/pkg/cloudprovider"
@@ -236,13 +237,15 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		api.Kind("ReplicationController"),
 		api.Kind("PersistentVolumeClaim"),
 		api.Kind("Secret"),
+		api.Kind("ConfigMap"),
 	}
 	resourceQuotaControllerOptions := &resourcequotacontroller.ResourceQuotaControllerOptions{
-		KubeClient:            resourceQuotaControllerClient,
-		ResyncPeriod:          controller.StaticResyncPeriodFunc(s.ResourceQuotaSyncPeriod.Duration),
-		Registry:              resourceQuotaRegistry,
-		GroupKindsToReplenish: groupKindsToReplenish,
-		ControllerFactory:     resourcequotacontroller.NewReplenishmentControllerFactory(resourceQuotaControllerClient),
+		KubeClient:                resourceQuotaControllerClient,
+		ResyncPeriod:              controller.StaticResyncPeriodFunc(s.ResourceQuotaSyncPeriod.Duration),
+		Registry:                  resourceQuotaRegistry,
+		ControllerFactory:         resourcequotacontroller.NewReplenishmentControllerFactory(resourceQuotaControllerClient),
+		ReplenishmentResyncPeriod: ResyncPeriod(s),
+		GroupKindsToReplenish:     groupKindsToReplenish,
 	}
 	go resourcequotacontroller.NewResourceQuotaController(resourceQuotaControllerOptions).Run(s.ConcurrentResourceQuotaSyncs, wait.NeverStop)
 
@@ -266,7 +269,14 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		glog.Fatalf("Failed to get supported resources from server: %v", err)
 	}
 
-	namespaceController := namespacecontroller.NewNamespaceController(clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "namespace-controller")), versions, s.NamespaceSyncPeriod.Duration)
+	// Find the list of namespaced resources via discovery that the namespace controller must manage
+	namespaceKubeClient := clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "namespace-controller"))
+	namespaceClientPool := dynamic.NewClientPool(restclient.AddUserAgent(kubeconfig, "namespace-controller"), dynamic.LegacyAPIPathResolverFunc)
+	groupVersionResources, err := namespacecontroller.ServerPreferredNamespacedGroupVersionResources(namespaceKubeClient.Discovery())
+	if err != nil {
+		glog.Fatalf("Failed to get supported resources from server: %v", err)
+	}
+	namespaceController := namespacecontroller.NewNamespaceController(namespaceKubeClient, namespaceClientPool, groupVersionResources, s.NamespaceSyncPeriod.Duration, api.FinalizerKubernetes)
 	go namespaceController.Run(s.ConcurrentNamespaceSyncs, wait.NeverStop)
 
 	groupVersion := "extensions/v1beta1"
@@ -284,13 +294,13 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 				metrics.DefaultHeapsterService,
 				metrics.DefaultHeapsterPort,
 			)
-			podautoscaler.NewHorizontalController(hpaClient.Core(), hpaClient.Extensions(), hpaClient, metricsClient).
-				Run(s.HorizontalPodAutoscalerSyncPeriod.Duration)
+			go podautoscaler.NewHorizontalController(hpaClient.Core(), hpaClient.Extensions(), hpaClient, metricsClient, s.HorizontalPodAutoscalerSyncPeriod.Duration).
+				Run(wait.NeverStop)
 		}
 
 		if containsResource(resources, "daemonsets") {
 			glog.Infof("Starting daemon set controller")
-			go daemon.NewDaemonSetsController(clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "daemon-set-controller")), ResyncPeriod(s)).
+			go daemon.NewDaemonSetsController(clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "daemon-set-controller")), ResyncPeriod(s), s.LookupCacheSizeForDaemonSet).
 				Run(s.ConcurrentDaemonSetSyncs, wait.NeverStop)
 		}
 

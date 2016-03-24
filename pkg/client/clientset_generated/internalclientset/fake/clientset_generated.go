@@ -18,13 +18,14 @@ package fake
 
 import (
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/testing/core"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	unversionedcore "k8s.io/kubernetes/pkg/client/typed/generated/core/unversioned"
 	fakeunversionedcore "k8s.io/kubernetes/pkg/client/typed/generated/core/unversioned/fake"
 	unversionedextensions "k8s.io/kubernetes/pkg/client/typed/generated/extensions/unversioned"
 	fakeunversionedextensions "k8s.io/kubernetes/pkg/client/typed/generated/extensions/unversioned/fake"
-	"k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
 )
@@ -39,7 +40,7 @@ func NewSimpleClientset(objects ...runtime.Object) *Clientset {
 	}
 
 	fakePtr := core.Fake{}
-	fakePtr.AddReactor("*", "*", core.ObjectReaction(o, api.RESTMapper))
+	fakePtr.AddReactor("*", "*", core.ObjectReaction(o, registered.RESTMapper()))
 
 	fakePtr.AddWatchReactor("*", core.DefaultWatchReactor(watch.NewFake(), nil))
 
@@ -53,7 +54,7 @@ type Clientset struct {
 	core.Fake
 }
 
-func (c *Clientset) Discovery() unversioned.DiscoveryInterface {
+func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 	return &FakeDiscovery{&c.Fake}
 }
 

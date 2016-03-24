@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"k8s.io/kubernetes/cmd/libs/go2idl/generator"
+	"k8s.io/kubernetes/cmd/libs/go2idl/namer"
 	"k8s.io/kubernetes/cmd/libs/go2idl/types"
 )
 
@@ -90,24 +91,6 @@ func (n *protobufNamer) GoNameToProtoName(name types.Name) types.Name {
 	return types.Name{Name: name.Name}
 }
 
-func (n *protobufNamer) protoNameForTypeName(name types.Name) string {
-	packageName := name.Package
-	if len(name.Package) != 0 {
-		if p, ok := n.packagesByPath[packageName]; ok {
-			packageName = p.Name()
-		} else {
-			packageName = protoSafePackage(packageName)
-		}
-	}
-	if len(name.Name) == 0 {
-		return packageName
-	}
-	if len(packageName) > 0 {
-		return packageName + "." + name.Name
-	}
-	return name.Name
-}
-
 func protoSafePackage(name string) string {
 	return strings.Replace(name, "/", ".", -1)
 }
@@ -142,7 +125,7 @@ func assignGoTypeToProtoPackage(p *protobufPackage, t *types.Type, local, global
 
 	local[t.Name] = p
 	for _, m := range t.Members {
-		if isPrivateGoName(m.Name) {
+		if namer.IsPrivateGoName(m.Name) {
 			continue
 		}
 		field := &protoField{}

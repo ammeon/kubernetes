@@ -125,13 +125,27 @@
 # Default email recipients are set in Jenkins global config
 - defaults:
     name: global
+    disable_job: false
     emails: '$DEFAULT_RECIPIENTS'
     cron-string: 'H/30 * * * *'
+    # How long to wait after sending TERM to send KILL (minutes)
+    kill-timeout: 15
+    # Just to be safe, use the Jenkins timeout after a long time.
+    jenkins-timeout: 600
+    # report-rc assumes that $rc is set to the exit status of the runner.
+    report-rc: |
+        if [[ ${{rc}} -eq 124 || ${{rc}} -eq 137 ]]; then
+            echo "Build timed out" >&2
+        elif [[ ${{rc}} -ne 0 ]]; then
+            echo "Build failed" >&2
+        fi
+        echo "Exiting with code: ${{rc}}"
+        exit ${{rc}}
     branch: 'master'
     job-env: ''
-    runner: curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/master/hack/jenkins/e2e-runner.sh" | bash -
-    old-runner-1-1: curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.1/hack/jenkins/e2e.sh" | bash -
-    old-runner-1-0: curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.0/hack/jenkins/e2e.sh" | bash -
+    runner: bash <(curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/master/hack/jenkins/e2e-runner.sh")
+    old-runner-1-1: bash <(curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.1/hack/jenkins/e2e.sh")
+    old-runner-1-0: bash <(curl -fsS --retry 3  "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.0/hack/jenkins/e2e.sh")
     provider-env: ''
     gce-provider-env: |
         export KUBERNETES_PROVIDER="gce"
@@ -143,7 +157,7 @@
         export ZONE="us-central1-f"
         # By default, GKE tests run against the GKE test endpoint using CI Cloud SDK.
         # Release jobs (e.g. prod, staging, and test) override these two variables.
-        export CLOUDSDK_BUCKET="gs://cloud-sdk-build/testing/staging"
+        export CLOUDSDK_BUCKET="gs://cloud-sdk-testing/ci/staging"
         export CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER="https://test-container.sandbox.googleapis.com/"
         export FAIL_ON_GCP_RESOURCE_LEAK="true"
     aws-provider-env: |

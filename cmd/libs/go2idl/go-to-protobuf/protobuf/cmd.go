@@ -170,7 +170,7 @@ func Run(g *Generator) {
 		"public",
 	)
 	c.Verify = g.Common.VerifyOnly
-	c.FileTypes["protoidl"] = protoIDLFileType{}
+	c.FileTypes["protoidl"] = NewProtoFile()
 
 	if err != nil {
 		log.Fatalf("Failed making a context: %v", err)
@@ -229,7 +229,7 @@ func Run(g *Generator) {
 
 		// alter the generated protobuf file to remove the generated types (but leave the serializers) and rewrite the
 		// package statement to match the desired package name
-		if err := RewriteGeneratedGogoProtobufFile(outputPath, p.GoPackageName(), p.ExtractGeneratedType, buf.Bytes()); err != nil {
+		if err := RewriteGeneratedGogoProtobufFile(outputPath, p.ExtractGeneratedType, buf.Bytes()); err != nil {
 			log.Fatalf("Unable to rewrite generated %s: %v", outputPath, err)
 		}
 

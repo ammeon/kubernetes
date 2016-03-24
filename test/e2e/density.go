@@ -45,7 +45,7 @@ import (
 const (
 	NodeStartupThreshold       = 4 * time.Second
 	MinSaturationThreshold     = 2 * time.Minute
-	MinPodsPerSecondThroughput = 10
+	MinPodsPerSecondThroughput = 8
 )
 
 // Maximum container failures this test tolerates before failing.
@@ -113,6 +113,9 @@ func density30AddonResourceVerifier() map[string]resourceConstraint {
 // So by default it is added to the ginkgo.skip list (see driver.go).
 // To run this suite you must explicitly ask for it by setting the
 // -t/--test flag or ginkgo.focus flag.
+// IMPORTANT: This test is designed to work on large (>= 100 Nodes) clusters. For smaller ones
+// results will not be representative for control-plane performance as we'll start hitting
+// limits on Docker's concurrent container startup.
 var _ = Describe("Density", func() {
 	var c *client.Client
 	var nodeCount int
@@ -127,6 +130,11 @@ var _ = Describe("Density", func() {
 
 	// Gathers data prior to framework namespace teardown
 	AfterEach(func() {
+		saturationThreshold := time.Duration((totalPods / MinPodsPerSecondThroughput)) * time.Second
+		if saturationThreshold < MinSaturationThreshold {
+			saturationThreshold = MinSaturationThreshold
+		}
+		Expect(e2eStartupTime).NotTo(BeNumerically(">", saturationThreshold))
 		saturationData := SaturationTime{
 			TimeToSaturate: e2eStartupTime,
 			NumberOfNodes:  nodeCount,
@@ -147,12 +155,8 @@ var _ = Describe("Density", func() {
 	})
 
 	// Explicitly put here, to delete namespace at the end of the test
-	// (after measuring latency metrics, etc.).framework := NewFramework("density")
-	options := FrameworkOptions{
-		clientQPS:   20,
-		clientBurst: 30,
-	}
-	framework := NewFramework("density", options)
+	// (after measuring latency metrics, etc.).
+	framework := NewDefaultFramework("density")
 	framework.NamespaceDeletionTimeout = time.Hour
 
 	BeforeEach(func() {
@@ -550,12 +554,6 @@ var _ = Describe("Density", func() {
 				name := additionalPodsPrefix + "-" + strconv.Itoa(i)
 				c.Pods(ns).Delete(name, nil)
 			}
-
-			saturationThreshold := time.Duration((totalPods / MinPodsPerSecondThroughput)) * time.Second
-			if saturationThreshold < MinSaturationThreshold {
-				saturationThreshold = MinSaturationThreshold
-			}
-			Expect(e2eStartupTime).NotTo(BeNumerically(">", saturationThreshold))
 		})
 	}
 })

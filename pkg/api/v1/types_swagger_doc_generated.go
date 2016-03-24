@@ -1320,9 +1320,10 @@ func (ReplicationControllerSpec) SwaggerDoc() map[string]string {
 }
 
 var map_ReplicationControllerStatus = map[string]string{
-	"":                   "ReplicationControllerStatus represents the current status of a replication controller.",
-	"replicas":           "Replicas is the most recently oberved number of replicas. More info: http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller",
-	"observedGeneration": "ObservedGeneration reflects the generation of the most recently observed replication controller.",
+	"":                     "ReplicationControllerStatus represents the current status of a replication controller.",
+	"replicas":             "Replicas is the most recently oberved number of replicas. More info: http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller",
+	"fullyLabeledReplicas": "The number of pods that have labels matching the labels of the pod template of the replication controller.",
+	"observedGeneration":   "ObservedGeneration reflects the generation of the most recently observed replication controller.",
 }
 
 func (ReplicationControllerStatus) SwaggerDoc() map[string]string {
@@ -1565,7 +1566,7 @@ var map_VolumeMount = map[string]string{
 	"":          "VolumeMount describes a mounting of a Volume within a container.",
 	"name":      "This must match the Name of a Volume.",
 	"readOnly":  "Mounted read-only if true, read-write otherwise (false or unspecified). Defaults to false.",
-	"mountPath": "Path within the container at which the volume should be mounted.",
+	"mountPath": "Path within the container at which the volume should be mounted.  Must not contain ':'.",
 }
 
 func (VolumeMount) SwaggerDoc() map[string]string {

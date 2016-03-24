@@ -42,7 +42,7 @@ func rs(name string, replicas int, selector map[string]string) *exp.ReplicaSet {
 		Spec: exp.ReplicaSetSpec{
 			Replicas: replicas,
 			Selector: &unversioned.LabelSelector{MatchLabels: selector},
-			Template: &api.PodTemplateSpec{},
+			Template: api.PodTemplateSpec{},
 		},
 	}
 }
@@ -120,7 +120,7 @@ func newReplicaSet(d *exp.Deployment, name string, replicas int) *exp.ReplicaSet
 		},
 		Spec: exp.ReplicaSetSpec{
 			Replicas: replicas,
-			Template: &d.Spec.Template,
+			Template: d.Spec.Template,
 		},
 	}
 
@@ -230,13 +230,14 @@ func TestDeploymentController_reconcileOldReplicaSets(t *testing.T) {
 		expectedOldReplicas int
 	}{
 		{
-			deploymentReplicas: 10,
-			maxUnavailable:     intstr.FromInt(0),
-			oldReplicas:        10,
-			newReplicas:        0,
-			readyPodsFromOldRS: 10,
-			readyPodsFromNewRS: 0,
-			scaleExpected:      false,
+			deploymentReplicas:  10,
+			maxUnavailable:      intstr.FromInt(0),
+			oldReplicas:         10,
+			newReplicas:         0,
+			readyPodsFromOldRS:  10,
+			readyPodsFromNewRS:  0,
+			scaleExpected:       true,
+			expectedOldReplicas: 9,
 		},
 		{
 			deploymentReplicas:  10,
@@ -470,7 +471,7 @@ func TestDeploymentController_cleanupUnhealthyReplicas(t *testing.T) {
 			client:        &fakeClientset,
 			eventRecorder: &record.FakeRecorder{},
 		}
-		cleanupCount, err := controller.cleanupUnhealthyReplicas(oldRSs, &deployment, test.maxCleanupCount)
+		_, cleanupCount, err := controller.cleanupUnhealthyReplicas(oldRSs, &deployment, test.maxCleanupCount)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 			continue
@@ -492,11 +493,12 @@ func TestDeploymentController_scaleDownOldReplicaSetsForRollingUpdate(t *testing
 		expectedOldReplicas int
 	}{
 		{
-			deploymentReplicas: 10,
-			maxUnavailable:     intstr.FromInt(0),
-			readyPods:          10,
-			oldReplicas:        10,
-			scaleExpected:      false,
+			deploymentReplicas:  10,
+			maxUnavailable:      intstr.FromInt(0),
+			readyPods:           10,
+			oldReplicas:         10,
+			scaleExpected:       true,
+			expectedOldReplicas: 9,
 		},
 		{
 			deploymentReplicas:  10,
@@ -518,6 +520,13 @@ func TestDeploymentController_scaleDownOldReplicaSetsForRollingUpdate(t *testing
 			maxUnavailable:     intstr.FromInt(2),
 			readyPods:          10,
 			oldReplicas:        0,
+			scaleExpected:      false,
+		},
+		{
+			deploymentReplicas: 10,
+			maxUnavailable:     intstr.FromInt(2),
+			readyPods:          1,
+			oldReplicas:        10,
 			scaleExpected:      false,
 		},
 	}

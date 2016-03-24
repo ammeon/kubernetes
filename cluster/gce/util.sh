@@ -133,10 +133,12 @@ function copy-to-staging() {
 # give us an API for this, so we hardcode it.
 #
 # Assumed vars:
-#   REGIONAL_RELEASE
+#   RELEASE_REGION_FALLBACK
+#   REGIONAL_KUBE_ADDONS
 #   ZONE
 # Vars set:
 #   PREFERRED_REGION
+#   KUBE_ADDON_REGISTRY
 function set-preferred-region() {
   case ${ZONE} in
     asia-*)
@@ -149,9 +151,19 @@ function set-preferred-region() {
       PREFERRED_REGION=("us" "eu" "asia")
       ;;
   esac
+  local -r preferred="${PREFERRED_REGION[0]}"
 
   if [[ "${RELEASE_REGION_FALLBACK}" != "true" ]]; then
-    PREFERRED_REGION=( "${PREFERRED_REGION[0]}" )
+    PREFERRED_REGION=( "${preferred}" )
+  fi
+
+  # If we're using regional GCR, and we're outside the US, go to the
+  # regional registry. The gcr.io/google_containers registry is
+  # appropriate for US (for now).
+  if [[ "${REGIONAL_KUBE_ADDONS}" == "true" ]] && [[ "${preferred}" != "us" ]]; then
+    KUBE_ADDON_REGISTRY="${preferred}.gcr.io/google_containers"
+  else
+    KUBE_ADDON_REGISTRY="gcr.io/google_containers"
   fi
 }
 
@@ -268,7 +280,7 @@ function detect-node-names {
     done
     echo "INSTANCE_GROUPS=${INSTANCE_GROUPS[*]}" >&2
     echo "NODE_NAMES=${NODE_NAMES[*]}" >&2
-  else 
+  else
     echo "INSTANCE_GROUPS=" >&2
     echo "NODE_NAMES=" >&2
   fi
@@ -325,6 +337,19 @@ function detect-master () {
   echo "Using master: $KUBE_MASTER (external IP: $KUBE_MASTER_IP)"
 }
 
+# Reads kube-env metadata from master
+#
+# Assumed vars:
+#   KUBE_MASTER
+#   PROJECT
+#   ZONE
+function get-master-env() {
+  # TODO(zmerlynn): Make this more reliable with retries.
+  gcloud compute --project ${PROJECT} ssh --zone ${ZONE} ${KUBE_MASTER} --command \
+    "curl --fail --silent -H 'Metadata-Flavor: Google' \
+      'http://metadata/computeMetadata/v1/instance/attributes/kube-env'" 2>/dev/null
+}
+
 # Robustly try to create a static ip.
 # $1: The name of the ip to create
 # $2: The name of the region to create the ip in.
@@ -333,19 +358,27 @@ function create-static-ip {
   local attempt=0
   local REGION="$2"
   while true; do
-    if ! gcloud compute addresses create "$1" \
+    if gcloud compute addresses create "$1" \
       --project "${PROJECT}" \
       --region "${REGION}" -q > /dev/null; then
-      if (( attempt > 4 )); then
-        echo -e "${color_red}Failed to create static ip $1 ${color_norm}" >&2
-        exit 2
-      fi
-      attempt=$(($attempt+1)) 
-      echo -e "${color_yellow}Attempt $attempt failed to create static ip $1. Retrying.${color_norm}" >&2
-      sleep $(($attempt * 5))
-    else
+      # successful operation
       break
     fi
+
+    if cloud compute addresses describe "$1" \
+      --project "${PROJECT}" \
+      --region "${REGION}" >/dev/null 2>&1; then
+      # it exists - postcondition satisfied
+      break
+    fi
+
+    if (( attempt > 4 )); then
+      echo -e "${color_red}Failed to create static ip $1 ${color_norm}" >&2
+      exit 2
+    fi
+    attempt=$(($attempt+1))
+    echo -e "${color_yellow}Attempt $attempt failed to create static ip $1. Retrying.${color_norm}" >&2
+    sleep $(($attempt * 5))
   done
 }
 
@@ -385,9 +418,7 @@ function get-template-name-from-version {
 # Robustly try to create an instance template.
 # $1: The name of the instance template.
 # $2: The scopes flag.
-# $3: The minion start script metadata from file.
-# $4: The kube-env metadata.
-# $5 and others: Additional user defined metadata.
+# $3 and others: Metadata entries (must all be from a file).
 function create-node-template {
   detect-project
   local template_name="$1"
@@ -517,11 +548,13 @@ function kube-up {
   set_num_migs
 
   if [[ ${KUBE_USE_EXISTING_MASTER:-} == "true" ]]; then
+    parse-master-env
     create-nodes
     create-autoscaler
   else
     check-existing
     create-network
+    write-cluster-name
     create-master
     create-nodes-firewall
     create-nodes-template
@@ -662,14 +695,14 @@ function create-nodes-template() {
 # Assumes:
 # - MAX_INSTANCES_PER_MIG
 # - NUM_NODES
-# exports: 
+# exports:
 # - NUM_MIGS
 function set_num_migs() {
-  local defaulted_max_instances_per_mig=${MAX_INSTANCES_PER_MIG:-500}
+  local defaulted_max_instances_per_mig=${MAX_INSTANCES_PER_MIG:-1000}
 
   if [[ ${defaulted_max_instances_per_mig} -le "0" ]]; then
-    echo "MAX_INSTANCES_PER_MIG cannot be negative. Assuming default 500"
-    defaulted_max_instances_per_mig=500
+    echo "MAX_INSTANCES_PER_MIG cannot be negative. Assuming default 1000"
+    defaulted_max_instances_per_mig=1000
   fi
   export NUM_MIGS=$(((${NUM_NODES} + ${defaulted_max_instances_per_mig} - 1) / ${defaulted_max_instances_per_mig}))
 }
@@ -784,27 +817,6 @@ function check-cluster() {
       local elapsed=$(($(date +%s) - ${start_time}))
       if [[ ${elapsed} -gt ${KUBE_CLUSTER_INITIALIZATION_TIMEOUT} ]]; then
           echo -e "${color_red}Cluster failed to initialize within ${KUBE_CLUSTER_INITIALIZATION_TIMEOUT} seconds.${color_norm}" >&2
-          if [[ ${KUBE_TEST_DEBUG-} =~ ^[yY]$ ]]; then
-            local savedir="${E2E_REPORT_DIR-}"
-            if [[ -z "${savedir}" ]]; then
-              savedir="$(mktemp -t -d k8s-e2e.XXX)"
-            fi
-            echo "Preserving master logs in ${savedir}"
-            local logdir=/var/log
-            local basename
-            for basename in startupscript docker kubelet kube-apiserver; do
-              # TODO(mml): Perhaps revisit how we name logs for preservation and
-              # centralize an implementation.  Options include putting basename
-              # before hostname and including a timestamp.
-              local src="${logdir}/${basename}.log"
-              local dst="${savedir}/${MASTER_NAME}-${basename}.log"
-              echo "Copying ${MASTER_NAME}:${src}"
-              gcloud compute copy-files \
-                --project "${PROJECT}" --zone "${ZONE}" \
-                "${MASTER_NAME}:${src}" "${dst}" \
-                || true
-            done
-          fi
           exit 2
       fi
       printf "."
@@ -1321,13 +1333,13 @@ function ssh-to-node {
   local cmd="$2"
   # Loop until we can successfully ssh into the box
   for try in $(seq 1 5); do
-    if gcloud compute ssh --ssh-flag="-o LogLevel=quiet" --project "${PROJECT}" --zone="${ZONE}" "${node}" --command "echo test > /dev/null"; then
+    if gcloud compute ssh --ssh-flag="-o LogLevel=quiet" --ssh-flag="-o ConnectTimeout=30" --project "${PROJECT}" --zone="${ZONE}" "${node}" --command "echo test > /dev/null"; then
       break
     fi
     sleep 5
   done
   # Then actually try the command.
-  gcloud compute ssh --ssh-flag="-o LogLevel=quiet" --project "${PROJECT}" --zone="${ZONE}" "${node}" --command "${cmd}"
+  gcloud compute ssh --ssh-flag="-o LogLevel=quiet" --ssh-flag="-o ConnectTimeout=30" --project "${PROJECT}" --zone="${ZONE}" "${node}" --command "${cmd}"
 }
 
 # Restart the kube-proxy on a node ($1)

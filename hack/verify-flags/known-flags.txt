@@ -68,6 +68,7 @@ cpu-percent
 create-external-load-balancer
 current-release-pr
 current-replicas
+daemonset-lookup-cache-size
 default-container-cpu-limit
 default-container-mem-limit
 delay-shutdown
@@ -103,6 +104,9 @@ etcd-quorum-read
 etcd-server
 etcd-servers
 etcd-servers-overrides
+etcd-keyfile
+etcd-certfile
+etcd-cafile
 event-burst
 event-qps
 event-ttl
@@ -179,6 +183,7 @@ kube-reserved
 kubecfg-file
 kubectl-path
 kubelet-address
+kubelet-api-servers
 kubelet-cadvisor-port
 kubelet-certificate-authority
 kubelet-cgroups
@@ -188,6 +193,7 @@ kubelet-docker-endpoint
 kubelet-enable-debugging-handlers
 kubelet-host-network-sources
 kubelet-https
+kubelet-kubeconfig
 kubelet-network-plugin
 kubelet-pod-infra-container-image
 kubelet-port
@@ -285,6 +291,7 @@ private-mountns
 prom-push-gateway
 proto-import
 proxy-bindall
+proxy-kubeconfig
 proxy-logv
 proxy-mode
 proxy-port-range

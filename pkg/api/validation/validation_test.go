@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/api/service"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/capabilities"
@@ -1134,6 +1135,7 @@ func TestValidateVolumeMounts(t *testing.T) {
 		"empty name":      {{Name: "", MountPath: "/foo"}},
 		"name not found":  {{Name: "", MountPath: "/foo"}},
 		"empty mountpath": {{Name: "abc", MountPath: ""}},
+		"colon mountpath": {{Name: "abc", MountPath: "foo:bar"}},
 	}
 	for k, v := range errorCases {
 		if errs := validateVolumeMounts(v, volumes, field.NewPath("field")); len(errs) == 0 {
@@ -2877,6 +2879,34 @@ func TestValidateService(t *testing.T) {
 			},
 			numErrs: 1,
 		},
+		{
+			name: "valid LoadBalancer source range annotation",
+			tweakSvc: func(s *api.Service) {
+				s.Annotations[service.AnnotationLoadBalancerSourceRangesKey] = "1.2.3.4/8,  5.6.7.8/16"
+			},
+			numErrs: 0,
+		},
+		{
+			name: "empty LoadBalancer source range annotation",
+			tweakSvc: func(s *api.Service) {
+				s.Annotations[service.AnnotationLoadBalancerSourceRangesKey] = ""
+			},
+			numErrs: 0,
+		},
+		{
+			name: "invalid LoadBalancer source range annotation (hostname)",
+			tweakSvc: func(s *api.Service) {
+				s.Annotations[service.AnnotationLoadBalancerSourceRangesKey] = "foo.bar"
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid LoadBalancer source range annotation (invalid CIDR)",
+			tweakSvc: func(s *api.Service) {
+				s.Annotations[service.AnnotationLoadBalancerSourceRangesKey] = "1.2.3.4/33"
+			},
+			numErrs: 1,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -3834,6 +3864,14 @@ func getResourceList(cpu, memory string) api.ResourceList {
 	return res
 }
 
+func getStorageResourceList(storage string) api.ResourceList {
+	res := api.ResourceList{}
+	if storage != "" {
+		res[api.ResourceStorage] = resource.MustParse(storage)
+	}
+	return res
+}
+
 func TestValidateLimitRange(t *testing.T) {
 	successCases := []struct {
 		name string
@@ -3871,6 +3909,36 @@ func TestValidateLimitRange(t *testing.T) {
 						Default:              getResourceList("50m", "500Mi"),
 						DefaultRequest:       getResourceList("10m", "200Mi"),
 						MaxLimitRequestRatio: getResourceList("10", ""),
+					},
+				},
+			},
+		},
+		{
+			name: "thirdparty-fields-all-valid-standard-container-resources",
+			spec: api.LimitRangeSpec{
+				Limits: []api.LimitRangeItem{
+					{
+						Type:                 "thirdparty.com/foo",
+						Max:                  getResourceList("100m", "10000T"),
+						Min:                  getResourceList("5m", "100Mi"),
+						Default:              getResourceList("50m", "500Mi"),
+						DefaultRequest:       getResourceList("10m", "200Mi"),
+						MaxLimitRequestRatio: getResourceList("10", ""),
+					},
+				},
+			},
+		},
+		{
+			name: "thirdparty-fields-all-valid-storage-resources",
+			spec: api.LimitRangeSpec{
+				Limits: []api.LimitRangeItem{
+					{
+						Type:                 "thirdparty.com/foo",
+						Max:                  getStorageResourceList("10000T"),
+						Min:                  getStorageResourceList("100Mi"),
+						Default:              getStorageResourceList("500Mi"),
+						DefaultRequest:       getStorageResourceList("200Mi"),
+						MaxLimitRequestRatio: getStorageResourceList(""),
 					},
 				},
 			},
@@ -4022,6 +4090,21 @@ func TestValidateLimitRange(t *testing.T) {
 			}},
 			"ratio 10 is greater than max/min = 4.000000",
 		},
+		"invalid non standard limit type": {
+			api.LimitRange{ObjectMeta: api.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: api.LimitRangeSpec{
+				Limits: []api.LimitRangeItem{
+					{
+						Type:                 "foo",
+						Max:                  getStorageResourceList("10000T"),
+						Min:                  getStorageResourceList("100Mi"),
+						Default:              getStorageResourceList("500Mi"),
+						DefaultRequest:       getStorageResourceList("200Mi"),
+						MaxLimitRequestRatio: getStorageResourceList(""),
+					},
+				},
+			}},
+			"must be a standard limit type or fully qualified",
+		},
 	}
 
 	for k, v := range errorCases {
@@ -4052,6 +4135,8 @@ func TestValidateResourceQuota(t *testing.T) {
 			api.ResourceServices:               resource.MustParse("0"),
 			api.ResourceReplicationControllers: resource.MustParse("10"),
 			api.ResourceQuotas:                 resource.MustParse("10"),
+			api.ResourceConfigMaps:             resource.MustParse("10"),
+			api.ResourceSecrets:                resource.MustParse("10"),
 		},
 	}
 
@@ -4099,6 +4184,8 @@ func TestValidateResourceQuota(t *testing.T) {
 			api.ResourceServices:               resource.MustParse("-10"),
 			api.ResourceReplicationControllers: resource.MustParse("-10"),
 			api.ResourceQuotas:                 resource.MustParse("-10"),
+			api.ResourceConfigMaps:             resource.MustParse("-10"),
+			api.ResourceSecrets:                resource.MustParse("-10"),
 		},
 	}
 
