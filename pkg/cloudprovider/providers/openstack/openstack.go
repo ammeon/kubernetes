@@ -34,13 +34,11 @@ import (
 	"github.com/rackspace/gophercloud/openstack"
 	"github.com/rackspace/gophercloud/openstack/blockstorage/v1/volumes"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/volumeattach"
-	"github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
 	"github.com/rackspace/gophercloud/pagination"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 )
 
@@ -56,11 +54,6 @@ var ErrNotFound = errors.New("Failed to find object")
 var ErrMultipleResults = errors.New("Multiple results where only one expected")
 var ErrNoAddressFound = errors.New("No address found for host")
 var ErrAttrNotFound = errors.New("Expected attribute not found")
-
-const (
-	MiB = 1024 * 1024
-	GB  = 1000 * 1000 * 1000
-)
 
 // encoding.TextUnmarshaler interface for time.Duration
 type MyDuration struct {
@@ -285,63 +278,36 @@ func newOpenStack(cfg Config) (*OpenStack, error) {
 }
 
 type Instances struct {
-	compute            *gophercloud.ServiceClient
-	flavor_to_resource map[string]*api.NodeResources // keyed by flavor id
+	os *OpenStack
 }
 
 // Instances returns an implementation of Instances for OpenStack.
 func (os *OpenStack) Instances() (cloudprovider.Instances, bool) {
 	glog.V(4).Info("openstack.Instances() called")
 
-	compute, err := openstack.NewComputeV2(os.provider, gophercloud.EndpointOpts{
-		Region: os.region,
-	})
+	err := os.Compute()
 	if err != nil {
-		glog.Warningf("Failed to find compute endpoint: %v", err)
 		return nil, false
 	}
-
-	pager := flavors.ListDetail(compute, nil)
-
-	flavor_to_resource := make(map[string]*api.NodeResources)
-	err = pager.EachPage(func(page pagination.Page) (bool, error) {
-		flavorList, err := flavors.ExtractFlavors(page)
-		if err != nil {
-			return false, err
-		}
-		for _, flavor := range flavorList {
-			rsrc := api.NodeResources{
-				Capacity: api.ResourceList{
-					api.ResourceCPU:            *resource.NewQuantity(int64(flavor.VCPUs), resource.DecimalSI),
-					api.ResourceMemory:         *resource.NewQuantity(int64(flavor.RAM)*MiB, resource.BinarySI),
-					"openstack.org/disk":       *resource.NewQuantity(int64(flavor.Disk)*GB, resource.DecimalSI),
-					"openstack.org/rxTxFactor": *resource.NewMilliQuantity(int64(flavor.RxTxFactor)*1000, resource.DecimalSI),
-					"openstack.org/swap":       *resource.NewQuantity(int64(flavor.Swap)*MiB, resource.BinarySI),
-				},
-			}
-			flavor_to_resource[flavor.ID] = &rsrc
-		}
-		return true, nil
-	})
-	if err != nil {
-		glog.Warningf("Failed to find compute flavors: %v", err)
-		return nil, false
-	}
-
-	glog.V(3).Infof("Found %v compute flavors", len(flavor_to_resource))
-	glog.V(1).Info("Claiming to support Instances")
-
-	return &Instances{compute, flavor_to_resource}, true
+	return &Instances{os}, true
 }
 
 func (i *Instances) List(name_filter string) ([]string, error) {
 	glog.V(4).Infof("openstack List(%v) called", name_filter)
 
+	ret, err := findInstances(i.os.compute, name_filter)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func findInstances(compute *gophercloud.ServiceClient, name_filter string) ([]string, error) {
 	opts := servers.ListOpts{
 		Name:   name_filter,
 		Status: "ACTIVE",
 	}
-	pager := servers.List(i.compute, opts)
+	pager := servers.List(compute, opts)
 
 	ret := make([]string, 0)
 	err := pager.EachPage(func(page pagination.Page) (bool, error) {
@@ -360,7 +326,6 @@ func (i *Instances) List(name_filter string) ([]string, error) {
 
 	glog.V(3).Infof("Found %v instances matching %v: %v",
 		len(ret), name_filter, ret)
-
 	return ret, nil
 }
 
@@ -532,7 +497,7 @@ func (i *Instances) AddSSHKeyToAllInstances(user string, keyData []byte) error {
 func (i *Instances) NodeAddresses(name string) ([]api.NodeAddress, error) {
 	glog.V(4).Infof("NodeAddresses(%v) called", name)
 
-	addrs, err := getAddressesByName(i.compute, name)
+	addrs, err := getAddressesByName(i.os.compute, name)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +508,7 @@ func (i *Instances) NodeAddresses(name string) ([]api.NodeAddress, error) {
 
 // ExternalID returns the cloud provider ID of the specified instance (deprecated).
 func (i *Instances) ExternalID(name string) (string, error) {
-	srv, err := getServerByName(i.compute, name)
+	srv, err := getServerByName(i.os.compute, name)
 	if err != nil {
 		return "", err
 	}
@@ -557,7 +522,7 @@ func (os *OpenStack) InstanceID() (string, error) {
 
 // InstanceID returns the cloud provider ID of the specified instance.
 func (i *Instances) InstanceID(name string) (string, error) {
-	srv, err := getServerByName(i.compute, name)
+	srv, err := getServerByName(i.os.compute, name)
 	if err != nil {
 		return "", err
 	}
