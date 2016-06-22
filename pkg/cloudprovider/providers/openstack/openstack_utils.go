@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/ports"
 	"github.com/rackspace/gophercloud/pagination"
 )
 
@@ -83,4 +84,55 @@ func (os *OpenStack) getServerFromMetadata(metadata string) (*servers.Server, er
 	}
 
 	return &serverList[0], nil
+}
+
+func (os *OpenStack) setAllowedAddressPair(server *servers.Server, address string) error {
+	var mac_addr string
+	for _, netblob := range server.Addresses {
+		list, ok := netblob.([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, item := range list {
+			props, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			extIPType, ok := props["OS-EXT-IPS:type"]
+			if ok && extIPType == "fixed" {
+				mac_addr = props["OS-EXT-IPS-MAC:mac_addr"].(string)
+			}
+		}
+	}
+	listOpts := ports.ListOpts{MACAddress: mac_addr}
+	var port ports.Port
+	pager := ports.List(os.network, listOpts)
+
+	err := pager.EachPage(func(page pagination.Page) (bool, error) {
+		portList, err := ports.ExtractPorts(page)
+		if err != nil {
+			return false, err
+		}
+
+		for _, s := range portList {
+			port = s
+			return true, nil
+		}
+		return true, nil
+	})
+	addressPairs := port.AllowedAddressPairs
+	for _, pair := range addressPairs {
+		if pair.IPAddress == address {
+			return nil
+		}
+	}
+	addressPairs = append(addressPairs, ports.AddressPair{IPAddress: address})
+	updateOpts := ports.UpdateOpts{AllowedAddressPairs: addressPairs}
+
+	_, err = ports.Update(os.network, port.ID, updateOpts).Extract()
+	if err != nil {
+		return err
+	}
+	return nil
 }

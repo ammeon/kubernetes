@@ -100,11 +100,51 @@ type OpenStackInstance struct {
 	AvailabilityZone string `json:"availability-zone"`
 }
 
+// Network sets up the OpenStack network endpoint.
+func (os *OpenStack) Network() error {
+	if os.network != nil {
+		return nil
+	}
+	network, err := openstack.NewNetworkV2(os.provider, gophercloud.EndpointOpts{
+		Region: os.region,
+	})
+	if err != nil {
+		glog.Warningf("Failed to find neutron endpoint: %v", err)
+		return err
+	}
+	os.network = network
+	return nil
+}
+
+// Compute sets up the OpenStack compute endpoint.
+func (os *OpenStack) Compute() error {
+	if os.compute != nil {
+		return nil
+	}
+	compute, err := openstack.NewComputeV2(os.provider, gophercloud.EndpointOpts{
+		Region: os.region,
+	})
+	if err != nil {
+		glog.Warningf("Failed to find compute endpoint: %v", err)
+		return err
+	}
+	os.compute = compute
+	return nil
+}
+
+type RouteOpts struct {
+	RouterId         string `gcfg:"router-id"` // required
+	HostnameOverride bool   `gcfg:"hostname-override"`
+}
+
 // OpenStack is an implementation of cloud provider Interface for OpenStack.
 type OpenStack struct {
-	provider *gophercloud.ProviderClient
-	region   string
-	lbOpts   LoadBalancerOpts
+	provider  *gophercloud.ProviderClient
+	network   *gophercloud.ServiceClient
+	compute   *gophercloud.ServiceClient
+	region    string
+	lbOpts    LoadBalancerOpts
+	routeOpts RouteOpts
 	// InstanceID of the server where this OpenStack object is instantiated.
 	openStackInstance *OpenStackInstance
 }
@@ -123,6 +163,7 @@ type Config struct {
 		Region     string
 	}
 	LoadBalancer LoadBalancerOpts
+	Route        RouteOpts
 }
 
 func init() {
@@ -217,13 +258,14 @@ func newOpenStack(cfg Config) (*OpenStack, error) {
 
 	instance, err := getInstanceMetaData()
 	if err != nil {
-		return nil, err
+		glog.Info("Not running on an OpenStack Instance")
 	}
 
 	os := OpenStack{
 		provider:          provider,
 		region:            cfg.Global.Region,
 		lbOpts:            cfg.LoadBalancer,
+		routeOpts:         cfg.Route,
 		openStackInstance: instance,
 	}
 	if err == nil {
@@ -354,7 +396,18 @@ func getAddressesByName(client *gophercloud.ServiceClient, name string) ([]api.N
 	if err != nil {
 		return nil, err
 	}
+	return getAddresses(srv)
+}
 
+func getAddressesByID(client *gophercloud.ServiceClient, id string) ([]api.NodeAddress, error) {
+	srv, err := servers.Get(client, id).Extract()
+	if err != nil {
+		return nil, err
+	}
+	return getAddresses(srv)
+}
+
+func getAddresses(srv *servers.Server) ([]api.NodeAddress, error) {
 	addrs := []api.NodeAddress{}
 
 	for network, netblob := range srv.Addresses {
@@ -407,14 +460,14 @@ func getAddressesByName(client *gophercloud.ServiceClient, name string) ([]api.N
 	}
 
 	if srv.AccessIPv6 != "" {
-		api.AddToNodeAddresses(&addrs,
+		api.AddToNodeAddresses(
+			&addrs,
 			api.NodeAddress{
 				Type:    api.NodeExternalIP,
 				Address: srv.AccessIPv6,
 			},
 		)
 	}
-
 	return addrs, nil
 }
 
@@ -433,6 +486,43 @@ func getAddressByName(client *gophercloud.ServiceClient, name string) (string, e
 	}
 
 	return addrs[0].Address, nil
+}
+
+func getServerByAddress(compute *gophercloud.ServiceClient, ip string) (*servers.Server, error) {
+	opts := servers.ListOpts{
+		Status: "ACTIVE",
+	}
+	pager := servers.List(compute, opts)
+
+	serverList := make([]servers.Server, 0, 1)
+
+	err := pager.EachPage(func(page pagination.Page) (bool, error) {
+		s, err := servers.ExtractServers(page)
+		if err != nil {
+			return false, err
+		}
+		for _, server := range s {
+			addr, err := getAddressByName(compute, server.Name)
+			if err != nil {
+				return false, err
+			}
+			if addr == ip {
+				serverList = append(serverList, server)
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(serverList) == 0 {
+		return nil, ErrNotFound
+	} else if len(serverList) > 1 {
+		return nil, ErrMultipleResults
+	}
+
+	return &serverList[0], nil
 }
 
 // Implementation of Instances.CurrentNodeName
@@ -571,10 +661,6 @@ func (os *OpenStack) GetZone() (cloudprovider.Zone, error) {
 	glog.V(1).Infof("Current zone is %v", os.region)
 
 	return cloudprovider.Zone{Region: os.region}, nil
-}
-
-func (os *OpenStack) Routes() (cloudprovider.Routes, bool) {
-	return nil, false
 }
 
 // Attaches given cinder volume to the compute running kubelet
