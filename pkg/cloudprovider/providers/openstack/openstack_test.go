@@ -203,55 +203,48 @@ func TestInstances(t *testing.T) {
 }
 
 func TestLoadBalancer(t *testing.T) {
-	cfg, ok := configFromEnv()
-	if !ok {
-		t.Skipf("No config found in environment")
-	}
-
-	cfg.LoadBalancer.LBVersion = "v2"
-
-	os, err := newOpenStack(cfg)
-	if err != nil {
-		t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
-	}
+	os := env.Openstack
 
 	lb, ok := os.LoadBalancer()
 	if !ok {
-		t.Fatalf("LoadBalancer() returned false - perhaps your stack doesn't support Neutron?")
+		t.Fatalf("LoadBalancer() returned false - Your stack doesn't support LBaas 'v1' or 'v2'")
 	}
 
-	_, exists, err := lb.GetLoadBalancer(&api.Service{ObjectMeta: api.ObjectMeta{Name: "noexist"}})
+	_, exists, err := lb.GetLoadBalancer(&api.Service{ObjectMeta: api.ObjectMeta{Name: "non-existent"}})
 	if err != nil {
-		t.Fatalf("GetLoadBalancer(\"noexist\") returned error: %s", err)
+		t.Fatalf("GetLoadBalancer(\"non-existent\") returned error: %s", err)
 	}
 	if exists {
-		t.Fatalf("GetLoadBalancer(\"noexist\") returned exists")
+		t.Fatalf("GetLoadBalancer(\"non-existent\") returned exists")
 	}
-}
 
-func TestLoadBalancerV2(t *testing.T) {
-	cfg, ok := configFromEnv()
-	if !ok {
-		t.Skipf("No config found in environment")
+	service := &api.Service{
+		ObjectMeta: api.ObjectMeta{Name: "test-service", UID: "id"},
+		Spec: api.ServiceSpec{
+			Ports: []api.ServicePort{{
+				Port:     80,
+				Protocol: api.ProtocolTCP,
+			}},
+			SessionAffinity: api.ServiceAffinityNone,
+			Type:            api.ServiceTypeLoadBalancer,
+		},
 	}
-	cfg.LoadBalancer.LBVersion = "v2"
-
-	os, err := newOpenStack(cfg)
+	_, err = lb.EnsureLoadBalancer(service, []string{})
 	if err != nil {
-		t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
+		t.Fatalf("EnsureLoadBalancer returned error: %s", err)
 	}
 
-	lbaas, ok := os.LoadBalancer()
-	if !ok {
-		t.Fatalf("LoadBalancer() returned false - perhaps your stack doesn't support Neutron?")
-	}
-
-	_, exists, err := lbaas.GetLoadBalancer(&api.Service{ObjectMeta: api.ObjectMeta{Name: "noexist"}})
+	_, exists, err = lb.GetLoadBalancer(service)
 	if err != nil {
-		t.Fatalf("GetLoadBalancer(\"noexist\") returned error: %s", err)
+		t.Fatalf("GetLoadBalancer(\"test-service\") returned error: %s", err)
 	}
-	if exists {
-		t.Fatalf("GetLoadBalancer(\"noexist\") returned exists")
+	if exists == false {
+		t.Fatalf("GetLoadBalancer(\"test-service\") failed to find the LoadBalancer")
+	}
+
+	err = lb.EnsureLoadBalancerDeleted(service)
+	if err != nil {
+		t.Fatalf("EnsureLoadBalancerDeleted returned error: %s", err)
 	}
 }
 

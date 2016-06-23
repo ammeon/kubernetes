@@ -81,8 +81,7 @@ type LoadBalancer struct {
 }
 
 type LoadBalancerOpts struct {
-	LBVersion         string     `gcfg:"lb-version"` // v1 or v2
-	SubnetId          string     `gcfg:"subnet-id"`  // required
+	SubnetId          string     `gcfg:"subnet-id"` // required
 	FloatingNetworkId string     `gcfg:"floating-network-id"`
 	LBMethod          string     `gcfg:"lb-method"`
 	CreateMonitor     bool       `gcfg:"create-monitor"`
@@ -581,28 +580,6 @@ func (os *OpenStack) ProviderName() string {
 // ScrubDNS filters DNS settings for pods.
 func (os *OpenStack) ScrubDNS(nameservers, searches []string) (nsOut, srchOut []string) {
 	return nameservers, searches
-}
-
-func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
-	glog.V(4).Info("openstack.LoadBalancer() called")
-
-	err := os.Network()
-	if err != nil {
-		return nil, false
-	}
-	err = os.Compute()
-	if err != nil {
-		return nil, false
-	}
-
-	glog.V(1).Info("Claiming to support LoadBalancer")
-
-	if os.lbOpts.LBVersion == "v2" {
-		return &LbaasV2{LoadBalancer{os}}, true
-	} else {
-
-		return &LbaasV1{LoadBalancer{os}}, true
-	}
 }
 
 func isNotFound(err error) bool {

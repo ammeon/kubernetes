@@ -55,6 +55,50 @@ type LbaasV2 struct {
 	LoadBalancer
 }
 
+func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
+	glog.V(4).Info("openstack.LoadBalancer() called")
+
+	err := os.Network()
+	if err != nil {
+		return nil, false
+	}
+	err = os.Compute()
+	if err != nil {
+		return nil, false
+	}
+
+	glog.V(4).Info("Checking LBaas 'v2' support")
+	pager := loadbalancers.List(os.network, loadbalancers.ListOpts{})
+	err = pager.EachPage(func(page pagination.Page) (bool, error) {
+		_, err := loadbalancers.ExtractLoadbalancers(page)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err == nil {
+		glog.V(2).Info("LBaas 'v2' supported")
+		return &LbaasV2{LoadBalancer{os}}, true
+	}
+
+	glog.V(4).Info("Checking LBaas 'v1' support")
+	pager = pools.List(os.network, pools.ListOpts{})
+	err = pager.EachPage(func(page pagination.Page) (bool, error) {
+		_, err := pools.ExtractPools(page)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err == nil {
+		glog.V(2).Info("LBaas 'v1' supported")
+		return &LbaasV1{LoadBalancer{os}}, true
+	}
+
+	glog.V(1).Info("Neither LBaas 'v2' or 'v1' are supported")
+	return nil, false
+}
+
 func getPortIDByIP(client *gophercloud.ServiceClient, ipAddress string) (string, error) {
 	var portID string
 
