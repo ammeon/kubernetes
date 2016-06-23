@@ -77,9 +77,7 @@ func (d *MyDuration) UnmarshalText(text []byte) error {
 }
 
 type LoadBalancer struct {
-	network *gophercloud.ServiceClient
-	compute *gophercloud.ServiceClient
-	opts    LoadBalancerOpts
+	os *OpenStack
 }
 
 type LoadBalancerOpts struct {
@@ -588,30 +586,22 @@ func (os *OpenStack) ScrubDNS(nameservers, searches []string) (nsOut, srchOut []
 func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 	glog.V(4).Info("openstack.LoadBalancer() called")
 
-	// TODO: Search for and support Rackspace loadbalancer API, and others.
-	network, err := openstack.NewNetworkV2(os.provider, gophercloud.EndpointOpts{
-		Region: os.region,
-	})
+	err := os.Network()
 	if err != nil {
-		glog.Warningf("Failed to find neutron endpoint: %v", err)
 		return nil, false
 	}
-
-	compute, err := openstack.NewComputeV2(os.provider, gophercloud.EndpointOpts{
-		Region: os.region,
-	})
+	err = os.Compute()
 	if err != nil {
-		glog.Warningf("Failed to find compute endpoint: %v", err)
 		return nil, false
 	}
 
 	glog.V(1).Info("Claiming to support LoadBalancer")
 
 	if os.lbOpts.LBVersion == "v2" {
-		return &LbaasV2{LoadBalancer{network, compute, os.lbOpts}}, true
+		return &LbaasV2{LoadBalancer{os}}, true
 	} else {
 
-		return &LbaasV1{LoadBalancer{network, compute, os.lbOpts}}, true
+		return &LbaasV1{LoadBalancer{os}}, true
 	}
 }
 
