@@ -281,7 +281,8 @@ func (lbaas *LbaasV2) GetLoadBalancer(service *api.Service) (*api.LoadBalancerSt
 // a list of regions (from config) and query/create loadbalancers in
 // each region.
 
-func (lbaas *LbaasV2) EnsureLoadBalancer(apiService *api.Service, hosts []string) (*api.LoadBalancerStatus, error) {
+func (lbaas *LbaasV2) EnsureLoadBalancer(apiService *api.Service, nodeList *api.NodeList) (*api.LoadBalancerStatus, error) {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	glog.V(4).Infof("EnsureLoadBalancer(%v, %v, %v, %v, %v, %v)", apiService.Namespace, apiService.Name, apiService.Spec.LoadBalancerIP, apiService.Spec.Ports, hosts, apiService.Annotations)
 
 	ports := apiService.Spec.Ports
@@ -451,7 +452,8 @@ func (lbaas *LbaasV2) EnsureLoadBalancer(apiService *api.Service, hosts []string
 	return status, nil
 }
 
-func (lbaas *LbaasV2) UpdateLoadBalancer(service *api.Service, hosts []string) error {
+func (lbaas *LbaasV2) UpdateLoadBalancer(service *api.Service, nodeList *api.NodeList) error {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	loadBalancerName := cloudprovider.GetLoadBalancerName(service)
 	glog.V(4).Infof("UpdateLoadBalancer(%v, %v)", loadBalancerName, hosts)
 
@@ -711,7 +713,8 @@ func (lb *LbaasV1) GetLoadBalancer(service *api.Service) (*api.LoadBalancerStatu
 // a list of regions (from config) and query/create loadbalancers in
 // each region.
 
-func (lb *LbaasV1) EnsureLoadBalancer(apiService *api.Service, hosts []string) (*api.LoadBalancerStatus, error) {
+func (lb *LbaasV1) EnsureLoadBalancer(apiService *api.Service, nodeList *api.NodeList) (*api.LoadBalancerStatus, error) {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	glog.V(4).Infof("EnsureLoadBalancer(%v, %v, %v, %v, %v, %v)", apiService.Namespace, apiService.Name, apiService.Spec.LoadBalancerIP, apiService.Spec.Ports, hosts, apiService.Annotations)
 
 	ports := apiService.Spec.Ports
@@ -860,7 +863,8 @@ func (lb *LbaasV1) EnsureLoadBalancer(apiService *api.Service, hosts []string) (
 
 }
 
-func (lb *LbaasV1) UpdateLoadBalancer(service *api.Service, hosts []string) error {
+func (lb *LbaasV1) UpdateLoadBalancer(service *api.Service, nodeList *api.NodeList) error {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	loadBalancerName := cloudprovider.GetLoadBalancerName(service)
 	glog.V(4).Infof("UpdateLoadBalancer(%v, %v)", loadBalancerName, hosts)
 

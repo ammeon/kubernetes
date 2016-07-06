@@ -130,7 +130,8 @@ func (f *FakeCloud) GetLoadBalancer(service *api.Service) (*api.LoadBalancerStat
 
 // EnsureLoadBalancer is a test-spy implementation of LoadBalancer.EnsureLoadBalancer.
 // It adds an entry "create" into the internal method call record.
-func (f *FakeCloud) EnsureLoadBalancer(service *api.Service, hosts []string) (*api.LoadBalancerStatus, error) {
+func (f *FakeCloud) EnsureLoadBalancer(service *api.Service, nodeList *api.NodeList) (*api.LoadBalancerStatus, error) {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	f.addCall("create")
 	if f.Balancers == nil {
 		f.Balancers = make(map[string]FakeBalancer)
@@ -155,7 +156,8 @@ func (f *FakeCloud) EnsureLoadBalancer(service *api.Service, hosts []string) (*a
 
 // UpdateLoadBalancer is a test-spy implementation of LoadBalancer.UpdateLoadBalancer.
 // It adds an entry "update" into the internal method call record.
-func (f *FakeCloud) UpdateLoadBalancer(service *api.Service, hosts []string) error {
+func (f *FakeCloud) UpdateLoadBalancer(service *api.Service, nodeList *api.NodeList) error {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	f.addCall("update")
 	f.UpdateCalls = append(f.UpdateCalls, FakeUpdateBalancerCall{service, hosts})
 	return f.Err

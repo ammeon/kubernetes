@@ -2264,10 +2264,11 @@ func buildListener(port api.ServicePort, annotations map[string]string, sslPorts
 }
 
 // EnsureLoadBalancer implements LoadBalancer.EnsureLoadBalancer
-func (c *Cloud) EnsureLoadBalancer(apiService *api.Service, hosts []string) (*api.LoadBalancerStatus, error) {
+func (c *Cloud) EnsureLoadBalancer(apiService *api.Service, nodeList *api.NodeList) (*api.LoadBalancerStatus, error) {
 	annotations := apiService.Annotations
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	glog.V(2).Infof("EnsureLoadBalancer(%v, %v, %v, %v, %v, %v, %v)",
-		apiService.Namespace, apiService.Name, c.region, apiService.Spec.LoadBalancerIP, apiService.Spec.Ports, hosts, annotations)
+		apiService.Namespace, apiService.Name, c.region, apiService.Spec.LoadBalancerIP, apiService.Spec.Ports, nodeList, annotations)
 
 	if apiService.Spec.SessionAffinity != api.ServiceAffinityNone {
 		// ELB supports sticky sessions, but only when configured for HTTP/HTTPS
@@ -2299,7 +2300,6 @@ func (c *Cloud) EnsureLoadBalancer(apiService *api.Service, hosts []string) (*ap
 	if apiService.Spec.LoadBalancerIP != "" {
 		return nil, fmt.Errorf("LoadBalancerIP cannot be specified for AWS ELB")
 	}
-
 	hostSet := sets.NewString(hosts...)
 	instances, err := c.getInstancesByNodeNamesCached(hostSet)
 	if err != nil {
@@ -2751,7 +2751,8 @@ func (c *Cloud) EnsureLoadBalancerDeleted(service *api.Service) error {
 }
 
 // UpdateLoadBalancer implements LoadBalancer.UpdateLoadBalancer
-func (c *Cloud) UpdateLoadBalancer(service *api.Service, hosts []string) error {
+func (c *Cloud) UpdateLoadBalancer(service *api.Service, nodeList *api.NodeList) error {
+	hosts := cloudprovider.HostsFromNodeList(nodeList)
 	hostSet := sets.NewString(hosts...)
 	instances, err := c.getInstancesByNodeNamesCached(hostSet)
 	if err != nil {
