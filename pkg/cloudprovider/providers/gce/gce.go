@@ -521,7 +521,8 @@ func isHTTPErrorCode(err error, code int) bool {
 // Due to an interesting series of design decisions, this handles both creating
 // new load balancers and updating existing load balancers, recognizing when
 // each is needed.
-func (gce *GCECloud) EnsureLoadBalancer(apiService *api.Service, hostNames []string) (*api.LoadBalancerStatus, error) {
+func (gce *GCECloud) EnsureLoadBalancer(apiService *api.Service, nodeList *api.NodeList) (*api.LoadBalancerStatus, error) {
+	hostNames := cloudprovider.HostsFromNodeList(nodeList)
 	if len(hostNames) == 0 {
 		return nil, fmt.Errorf("Cannot EnsureLoadBalancer() with no hosts")
 	}
@@ -1161,7 +1162,8 @@ func (gce *GCECloud) ensureStaticIP(name, serviceName, region, existingIP string
 }
 
 // UpdateLoadBalancer is an implementation of LoadBalancer.UpdateLoadBalancer.
-func (gce *GCECloud) UpdateLoadBalancer(service *api.Service, hostNames []string) error {
+func (gce *GCECloud) UpdateLoadBalancer(service *api.Service, nodeList *api.NodeList) error {
+	hostNames := cloudprovider.HostsFromNodeList(nodeList)
 	hosts, err := gce.getInstancesByNames(hostNames)
 	if err != nil {
 		return err

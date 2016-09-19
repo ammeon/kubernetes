@@ -63,6 +63,14 @@ func GetLoadBalancerName(service *api.Service) string {
 	return ret
 }
 
+func HostsFromNodeList(list *api.NodeList) []string {
+	result := []string{}
+	for ix := range list.Items {
+		result = append(result, list.Items[ix].Name)
+	}
+	return result
+}
+
 func GetInstanceProviderID(cloud Interface, nodeName string) (string, error) {
 	instances, ok := cloud.Instances()
 	if !ok {
@@ -84,10 +92,10 @@ type LoadBalancer interface {
 	GetLoadBalancer(service *api.Service) (status *api.LoadBalancerStatus, exists bool, err error)
 	// EnsureLoadBalancer creates a new load balancer 'name', or updates the existing one. Returns the status of the balancer
 	// Implementations must treat the *api.Service parameter as read-only and not modify it.
-	EnsureLoadBalancer(service *api.Service, hosts []string) (*api.LoadBalancerStatus, error)
+	EnsureLoadBalancer(service *api.Service, node *api.NodeList) (*api.LoadBalancerStatus, error)
 	// UpdateLoadBalancer updates hosts under the specified load balancer.
 	// Implementations must treat the *api.Service parameter as read-only and not modify it.
-	UpdateLoadBalancer(service *api.Service, hosts []string) error
+	UpdateLoadBalancer(service *api.Service, node *api.NodeList) error
 	// EnsureLoadBalancerDeleted deletes the specified load balancer if it
 	// exists, returning nil if the load balancer specified either didn't exist or
 	// was successfully deleted.

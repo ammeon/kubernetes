@@ -399,7 +399,7 @@ func (s *ServiceController) persistUpdate(service *api.Service) error {
 }
 
 func (s *ServiceController) createLoadBalancer(service *api.Service) error {
-	nodes, err := s.nodeLister.List()
+	nodes, err := s.nodeLister.NodeCondition(getNodeConditionPredicate()).List()
 	if err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func (s *ServiceController) createLoadBalancer(service *api.Service) error {
 	// - Only one protocol supported per service
 	// - Not all cloud providers support all protocols and the next step is expected to return
 	//   an error for unsupported protocols
-	status, err := s.balancer.EnsureLoadBalancer(service, hostsFromNodeList(&nodes))
+	status, err := s.balancer.EnsureLoadBalancer(service, &nodes)
 	if err != nil {
 		return err
 	} else {
@@ -679,7 +679,7 @@ func (s *ServiceController) nodeSyncLoop(period time.Duration) {
 		if stringSlicesEqual(newHosts, prevHosts) {
 			// The set of nodes in the cluster hasn't changed, but we can retry
 			// updating any services that we failed to update last time around.
-			servicesToUpdate = s.updateLoadBalancerHosts(servicesToUpdate, newHosts)
+			servicesToUpdate = s.updateLoadBalancerHosts(servicesToUpdate, &nodes)
 			continue
 		}
 		glog.Infof("Detected change in list of current cluster nodes. New node set: %v", newHosts)
@@ -688,7 +688,7 @@ func (s *ServiceController) nodeSyncLoop(period time.Duration) {
 		// round.
 		servicesToUpdate = s.cache.allServices()
 		numServices := len(servicesToUpdate)
-		servicesToUpdate = s.updateLoadBalancerHosts(servicesToUpdate, newHosts)
+		servicesToUpdate = s.updateLoadBalancerHosts(servicesToUpdate, &nodes)
 		glog.Infof("Successfully updated %d out of %d load balancers to direct traffic to the updated set of nodes",
 			numServices-len(servicesToUpdate), numServices)
 
@@ -699,7 +699,7 @@ func (s *ServiceController) nodeSyncLoop(period time.Duration) {
 // updateLoadBalancerHosts updates all existing load balancers so that
 // they will match the list of hosts provided.
 // Returns the list of services that couldn't be updated.
-func (s *ServiceController) updateLoadBalancerHosts(services []*cachedService, hosts []string) (servicesToRetry []*cachedService) {
+func (s *ServiceController) updateLoadBalancerHosts(services []*cachedService, nodes *api.NodeList) (servicesToRetry []*cachedService) {
 	for _, service := range services {
 		func() {
 			service.mu.Lock()
@@ -711,7 +711,7 @@ func (s *ServiceController) updateLoadBalancerHosts(services []*cachedService, h
 			if service.appliedState == nil {
 				return
 			}
-			if err := s.lockedUpdateLoadBalancerHosts(service.appliedState, hosts); err != nil {
+			if err := s.lockedUpdateLoadBalancerHosts(service.appliedState, nodes); err != nil {
 				glog.Errorf("External error while updating load balancer: %v.", err)
 				servicesToRetry = append(servicesToRetry, service)
 			}
@@ -722,13 +722,13 @@ func (s *ServiceController) updateLoadBalancerHosts(services []*cachedService, h
 
 // Updates the load balancer of a service, assuming we hold the mutex
 // associated with the service.
-func (s *ServiceController) lockedUpdateLoadBalancerHosts(service *api.Service, hosts []string) error {
+func (s *ServiceController) lockedUpdateLoadBalancerHosts(service *api.Service, nodes *api.NodeList) error {
 	if !wantsLoadBalancer(service) {
 		return nil
 	}
 
 	// This operation doesn't normally take very long (and happens pretty often), so we only record the final event
-	err := s.balancer.UpdateLoadBalancer(service, hosts)
+	err := s.balancer.UpdateLoadBalancer(service, nodes)
 	if err == nil {
 		s.eventRecorder.Event(service, api.EventTypeNormal, "UpdatedLoadBalancer", "Updated load balancer with new hosts")
 		return nil
@@ -741,6 +741,7 @@ func (s *ServiceController) lockedUpdateLoadBalancerHosts(service *api.Service, 
 		return nil
 	}
 
+	hosts := hostsFromNodeList(nodes)
 	s.eventRecorder.Eventf(service, api.EventTypeWarning, "LoadBalancerUpdateFailed", "Error updating load balancer with new hosts %v: %v", hosts, err)
 	return err
 }
