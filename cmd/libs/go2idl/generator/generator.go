@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ type Package interface {
 	Path() string
 
 	// Filter should return true if this package cares about this type.
-	// Otherwise, this type will be ommitted from the type ordering for
+	// Otherwise, this type will be omitted from the type ordering for
 	// this package.
 	Filter(*Context, *types.Type) bool
 
@@ -184,7 +184,7 @@ func NewContext(b *parser.Builder, nameSystems namer.NameSystems, canonicalOrder
 	for name, systemNamer := range nameSystems {
 		c.Namers[name] = systemNamer
 		if name == canonicalOrderName {
-			orderer := namer.Orderer{systemNamer}
+			orderer := namer.Orderer{Namer: systemNamer}
 			c.Order = orderer.OrderUniverse(u)
 		}
 	}

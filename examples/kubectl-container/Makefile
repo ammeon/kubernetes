@@ -1,4 +1,4 @@
-# Copyright 2016 The Kubernetes Authors All rights reserved.
+# Copyright 2016 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,8 +19,11 @@
 # `make container` will build a container-- you must supply a tag.
 # `make push` will push the container-- you must supply a tag.
 
+GOARCH?=$(shell go env GOARCH)
+GOOS?=$(shell go env GOOS)
+
 kubectl:
-	KUBE_STATIC_OVERRIDES="kubectl" ../../hack/build-go.sh cmd/kubectl; cp ../../_output/local/bin/linux/amd64/kubectl .
+	KUBE_STATIC_OVERRIDES="kubectl" ../../hack/build-go.sh cmd/kubectl; cp ../../_output/local/bin/$(GOOS)/$(GOARCH)/kubectl .
 
 .tag: kubectl
 	./kubectl version -c | grep -o 'GitVersion:"[^"]*"' | cut -f 2 -d '"' > .tag

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ SILENT=true
 # Excluded checks are always skipped.
 EXCLUDED_CHECKS=(
   "verify-linkcheck.sh"  # runs in separate Jenkins job once per day due to high network usage
-  "verify-generated-protobuf.sh"  # TODO(smarterclayton) add when protobuf is part of direct generation
   )
 
 function is-excluded {

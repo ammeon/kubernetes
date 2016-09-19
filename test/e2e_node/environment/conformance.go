@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -99,7 +99,7 @@ func containerRuntime() error {
 	}
 
 	// Setup cadvisor to check the container environment
-	c, err := cadvisor.New(0 /*don't start the http server*/)
+	c, err := cadvisor.New(0 /*don't start the http server*/, "docker")
 	if err != nil {
 		return printError("Container Runtime Check: %s Could not start cadvisor %v", failed, err)
 	}

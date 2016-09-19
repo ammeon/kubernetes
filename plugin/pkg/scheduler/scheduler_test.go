@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,20 +18,21 @@ package scheduler
 
 import (
 	"errors"
-	"fmt"
-	"math/rand"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/client/cache"
+	clientcache "k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/record"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/util/diff"
+	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm/predicates"
+	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+	schedulertesting "k8s.io/kubernetes/plugin/pkg/scheduler/testing"
 )
 
 type fakeBinder struct {
@@ -39,6 +40,12 @@ type fakeBinder struct {
 }
 
 func (fb fakeBinder) Bind(binding *api.Binding) error { return fb.b(binding) }
+
+type fakePodConditionUpdater struct{}
+
+func (fc fakePodConditionUpdater) Update(pod *api.Pod, podCondition *api.PodCondition) error {
+	return nil
+}
 
 func podWithID(id, desiredHost string) *api.Pod {
 	return &api.Pod{
@@ -52,7 +59,7 @@ func podWithID(id, desiredHost string) *api.Pod {
 func podWithPort(id, desiredHost string, port int) *api.Pod {
 	pod := podWithID(id, desiredHost)
 	pod.Spec.Containers = []api.Container{
-		{Name: "ctr", Ports: []api.ContainerPort{{HostPort: port}}},
+		{Name: "ctr", Ports: []api.ContainerPort{{HostPort: int32(port)}}},
 	}
 	return pod
 }
@@ -68,7 +75,7 @@ func (es mockScheduler) Schedule(pod *api.Pod, ml algorithm.NodeLister) (string,
 
 func TestScheduler(t *testing.T) {
 	eventBroadcaster := record.NewBroadcaster()
-	defer eventBroadcaster.StartLogging(t.Logf).Stop()
+	eventBroadcaster.StartLogging(t.Logf).Stop()
 	errS := errors.New("scheduler")
 	errB := errors.New("binder")
 
@@ -95,13 +102,14 @@ func TestScheduler(t *testing.T) {
 			expectErrorPod: podWithID("foo", ""),
 			eventReason:    "FailedScheduling",
 		}, {
-			sendPod:         podWithID("foo", ""),
-			algo:            mockScheduler{"machine1", nil},
-			expectBind:      &api.Binding{ObjectMeta: api.ObjectMeta{Name: "foo"}, Target: api.ObjectReference{Kind: "Node", Name: "machine1"}},
-			injectBindError: errB,
-			expectError:     errB,
-			expectErrorPod:  podWithID("foo", ""),
-			eventReason:     "FailedScheduling",
+			sendPod:          podWithID("foo", ""),
+			algo:             mockScheduler{"machine1", nil},
+			expectBind:       &api.Binding{ObjectMeta: api.ObjectMeta{Name: "foo"}, Target: api.ObjectReference{Kind: "Node", Name: "machine1"}},
+			expectAssumedPod: podWithID("foo", "machine1"),
+			injectBindError:  errB,
+			expectError:      errB,
+			expectErrorPod:   podWithID("foo", ""),
+			eventReason:      "FailedScheduling",
 		},
 	}
 
@@ -111,8 +119,8 @@ func TestScheduler(t *testing.T) {
 		var gotAssumedPod *api.Pod
 		var gotBinding *api.Binding
 		c := &Config{
-			Modeler: &FakeModeler{
-				AssumePodFunc: func(pod *api.Pod) {
+			SchedulerCache: &schedulertesting.FakeCache{
+				AssumeFunc: func(pod *api.Pod) {
 					gotAssumedPod = pod
 				},
 			},
@@ -124,6 +132,7 @@ func TestScheduler(t *testing.T) {
 				gotBinding = b
 				return item.injectBindError
 			}},
+			PodConditionUpdater: fakePodConditionUpdater{},
 			Error: func(p *api.Pod, err error) {
 				gotPod = p
 				gotError = err
@@ -142,6 +151,7 @@ func TestScheduler(t *testing.T) {
 			close(called)
 		})
 		s.scheduleOne()
+		<-called
 		if e, a := item.expectAssumedPod, gotAssumedPod; !reflect.DeepEqual(e, a) {
 			t.Errorf("%v: assumed pod: wanted %v, got %v", i, e, a)
 		}
@@ -152,175 +162,173 @@ func TestScheduler(t *testing.T) {
 			t.Errorf("%v: error: wanted %v, got %v", i, e, a)
 		}
 		if e, a := item.expectBind, gotBinding; !reflect.DeepEqual(e, a) {
-			t.Errorf("%v: error: %s", i, util.ObjectDiff(e, a))
+			t.Errorf("%v: error: %s", i, diff.ObjectDiff(e, a))
 		}
-		<-called
 		events.Stop()
 	}
 }
 
-func TestSchedulerForgetAssumedPodAfterDelete(t *testing.T) {
-	// Set up a channel through which we'll funnel log messages from the watcher.
-	// This way, we can guarantee that when the test ends no thread will still be
-	// trying to write to t.Logf (which it would if we handed t.Logf directly to
-	// StartLogging).
-	ch := make(chan string)
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
+func TestSchedulerNoPhantomPodAfterExpire(t *testing.T) {
+	stop := make(chan struct{})
+	defer close(stop)
+	queuedPodStore := clientcache.NewFIFO(clientcache.MetaNamespaceKeyFunc)
+	scache := schedulercache.New(100*time.Millisecond, stop)
+	pod := podWithPort("pod.Name", "", 8080)
+	scheduler, bindingChan, _ := setupTestSchedulerWithOnePod(t, queuedPodStore, scache, pod)
+
+	waitPodExpireChan := make(chan struct{})
+	timeout := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		for {
 			select {
-			case msg := <-ch:
-				t.Log(msg)
-			case <-done:
+			case <-timeout:
+				return
+			default:
+			}
+			pods, err := scache.List(labels.Everything())
+			if err != nil {
+				t.Fatalf("cache.List failed: %v", err)
+			}
+			if len(pods) == 0 {
+				close(waitPodExpireChan)
 				return
 			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
-	eventBroadcaster := record.NewBroadcaster()
-	watcher := eventBroadcaster.StartLogging(func(format string, args ...interface{}) {
-		ch <- fmt.Sprintf(format, args...)
-	})
-	defer func() {
-		watcher.Stop()
-		close(done)
-		wg.Wait()
-	}()
+	// waiting for the assumed pod to expire
+	select {
+	case <-waitPodExpireChan:
+	case <-time.After(wait.ForeverTestTimeout):
+		close(timeout)
+		t.Fatalf("timeout after %v", wait.ForeverTestTimeout)
+	}
 
-	// Setup modeler so we control the contents of all 3 stores: assumed,
-	// scheduled and queued
-	scheduledPodStore := cache.NewStore(cache.MetaNamespaceKeyFunc)
-	scheduledPodLister := &cache.StoreToPodLister{Store: scheduledPodStore}
+	// We use conflicted pod ports to incur fit predicate failure if first pod not removed.
+	secondPod := podWithPort("bar", "", 8080)
+	queuedPodStore.Add(secondPod)
+	scheduler.scheduleOne()
+	select {
+	case b := <-bindingChan:
+		expectBinding := &api.Binding{
+			ObjectMeta: api.ObjectMeta{Name: "bar"},
+			Target:     api.ObjectReference{Kind: "Node", Name: "machine1"},
+		}
+		if !reflect.DeepEqual(expectBinding, b) {
+			t.Errorf("binding want=%v, get=%v", expectBinding, b)
+		}
+	case <-time.After(wait.ForeverTestTimeout):
+		t.Fatalf("timeout after %v", wait.ForeverTestTimeout)
+	}
+}
 
-	queuedPodStore := cache.NewFIFO(cache.MetaNamespaceKeyFunc)
-	queuedPodLister := &cache.StoreToPodLister{Store: queuedPodStore}
+func TestSchedulerNoPhantomPodAfterDelete(t *testing.T) {
+	stop := make(chan struct{})
+	defer close(stop)
+	queuedPodStore := clientcache.NewFIFO(clientcache.MetaNamespaceKeyFunc)
+	scache := schedulercache.New(10*time.Minute, stop)
+	firstPod := podWithPort("pod.Name", "", 8080)
+	scheduler, bindingChan, errChan := setupTestSchedulerWithOnePod(t, queuedPodStore, scache, firstPod)
 
-	modeler := NewSimpleModeler(queuedPodLister, scheduledPodLister)
+	// We use conflicted pod ports to incur fit predicate failure.
+	secondPod := podWithPort("bar", "", 8080)
+	queuedPodStore.Add(secondPod)
+	// queuedPodStore: [bar:8080]
+	// cache: [(assumed)foo:8080]
 
-	// Create a fake clock used to timestamp entries and calculate ttl. Nothing
-	// will expire till we flip to something older than the ttl, at which point
-	// all entries inserted with fakeTime will expire.
-	ttl := 30 * time.Second
-	fakeTime := time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
-	fakeClock := util.NewFakeClock(fakeTime)
-	ttlPolicy := &cache.TTLPolicy{Ttl: ttl, Clock: fakeClock}
-	assumedPodsStore := cache.NewFakeExpirationStore(
-		cache.MetaNamespaceKeyFunc, nil, ttlPolicy, fakeClock)
-	modeler.assumedPods = &cache.StoreToPodLister{Store: assumedPodsStore}
+	scheduler.scheduleOne()
+	select {
+	case err := <-errChan:
+		expectErr := &FitError{
+			Pod:              secondPod,
+			FailedPredicates: FailedPredicateMap{"machine1": "PodFitsHostPorts"},
+		}
+		if !reflect.DeepEqual(expectErr, err) {
+			t.Errorf("err want=%v, get=%v", expectErr, err)
+		}
+	case <-time.After(wait.ForeverTestTimeout):
+		t.Fatalf("timeout after %v", wait.ForeverTestTimeout)
+	}
 
-	// Port is the easiest way to cause a fit predicate failure
-	podPort := 8080
-	firstPod := podWithPort("foo", "", podPort)
+	// We mimic the workflow of cache behavior when a pod is removed by user.
+	// Note: if the schedulercache timeout would be super short, the first pod would expire
+	// and would be removed itself (without any explicit actions on schedulercache). Even in that case,
+	// explicitly AddPod will as well correct the behavior.
+	firstPod.Spec.NodeName = "machine1"
+	if err := scache.AddPod(firstPod); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if err := scache.RemovePod(firstPod); err != nil {
+		t.Fatalf("err: %v", err)
+	}
 
+	queuedPodStore.Add(secondPod)
+	scheduler.scheduleOne()
+	select {
+	case b := <-bindingChan:
+		expectBinding := &api.Binding{
+			ObjectMeta: api.ObjectMeta{Name: "bar"},
+			Target:     api.ObjectReference{Kind: "Node", Name: "machine1"},
+		}
+		if !reflect.DeepEqual(expectBinding, b) {
+			t.Errorf("binding want=%v, get=%v", expectBinding, b)
+		}
+	case <-time.After(wait.ForeverTestTimeout):
+		t.Fatalf("timeout after %v", wait.ForeverTestTimeout)
+	}
+}
+
+// queuedPodStore: pods queued before processing.
+// cache: scheduler cache that might contain assumed pods.
+func setupTestSchedulerWithOnePod(t *testing.T, queuedPodStore *clientcache.FIFO, scache schedulercache.Cache, pod *api.Pod) (*Scheduler, chan *api.Binding, chan error) {
 	// Create the scheduler config
 	algo := NewGenericScheduler(
+		scache,
 		map[string]algorithm.FitPredicate{"PodFitsHostPorts": predicates.PodFitsHostPorts},
 		[]algorithm.PriorityConfig{},
-		[]algorithm.SchedulerExtender{},
-		modeler.PodLister(),
-		rand.New(rand.NewSource(time.Now().UnixNano())))
-
-	var gotBinding *api.Binding
-	c := &Config{
-		Modeler: modeler,
+		[]algorithm.SchedulerExtender{})
+	bindingChan := make(chan *api.Binding, 1)
+	errChan := make(chan error, 1)
+	cfg := &Config{
+		SchedulerCache: scache,
 		NodeLister: algorithm.FakeNodeLister(
 			api.NodeList{Items: []api.Node{{ObjectMeta: api.ObjectMeta{Name: "machine1"}}}},
 		),
 		Algorithm: algo,
 		Binder: fakeBinder{func(b *api.Binding) error {
-			scheduledPodStore.Add(podWithPort(b.Name, b.Target.Name, podPort))
-			gotBinding = b
+			bindingChan <- b
 			return nil
 		}},
 		NextPod: func() *api.Pod {
-			return queuedPodStore.Pop().(*api.Pod)
+			return clientcache.Pop(queuedPodStore).(*api.Pod)
 		},
 		Error: func(p *api.Pod, err error) {
-			t.Errorf("Unexpected error when scheduling pod %+v: %v", p, err)
+			errChan <- err
 		},
-		Recorder: eventBroadcaster.NewRecorder(api.EventSource{Component: "scheduler"}),
+		Recorder:            &record.FakeRecorder{},
+		PodConditionUpdater: fakePodConditionUpdater{},
 	}
+	scheduler := New(cfg)
 
-	// First scheduling pass should schedule the pod
-	s := New(c)
-	called := make(chan struct{})
-	events := eventBroadcaster.StartEventWatcher(func(e *api.Event) {
-		if e, a := "Scheduled", e.Reason; e != a {
-			t.Errorf("expected %v, got %v", e, a)
-		}
-		close(called)
-	})
-
-	queuedPodStore.Add(firstPod)
+	queuedPodStore.Add(pod)
 	// queuedPodStore: [foo:8080]
-	// scheduledPodStore: []
-	// assumedPods: []
+	// cache: []
 
-	s.scheduleOne()
+	scheduler.scheduleOne()
 	// queuedPodStore: []
-	// scheduledPodStore: [foo:8080]
-	// assumedPods: [foo:8080]
+	// cache: [(assumed)foo:8080]
 
-	pod, exists, _ := scheduledPodStore.GetByKey("foo")
-	if !exists {
-		t.Errorf("Expected scheduled pod store to contain pod")
-	}
-	pod, exists, _ = queuedPodStore.GetByKey("foo")
-	if exists {
-		t.Errorf("Did not expect a queued pod, found %+v", pod)
-	}
-	pod, exists, _ = assumedPodsStore.GetByKey("foo")
-	if !exists {
-		t.Errorf("Assumed pod store should contain stale pod")
-	}
-
-	expectBind := &api.Binding{
-		ObjectMeta: api.ObjectMeta{Name: "foo"},
-		Target:     api.ObjectReference{Kind: "Node", Name: "machine1"},
-	}
-	if ex, ac := expectBind, gotBinding; !reflect.DeepEqual(ex, ac) {
-		t.Errorf("Expected exact match on binding: %s", util.ObjectDiff(ex, ac))
-	}
-
-	<-called
-	events.Stop()
-
-	scheduledPodStore.Delete(pod)
-	_, exists, _ = assumedPodsStore.Get(pod)
-	if !exists {
-		t.Errorf("Expected pod %#v in assumed pod store", pod)
-	}
-
-	secondPod := podWithPort("bar", "", podPort)
-	queuedPodStore.Add(secondPod)
-	// queuedPodStore: [bar:8080]
-	// scheduledPodStore: []
-	// assumedPods: [foo:8080]
-
-	// Second scheduling pass will fail to schedule if the store hasn't expired
-	// the deleted pod. This would normally happen with a timeout.
-	//expirationPolicy.NeverExpire = util.NewStringSet()
-	fakeClock.Step(ttl + 1)
-
-	called = make(chan struct{})
-	events = eventBroadcaster.StartEventWatcher(func(e *api.Event) {
-		if e, a := "Scheduled", e.Reason; e != a {
-			t.Errorf("expected %v, got %v", e, a)
+	select {
+	case b := <-bindingChan:
+		expectBinding := &api.Binding{
+			ObjectMeta: api.ObjectMeta{Name: "pod.Name"},
+			Target:     api.ObjectReference{Kind: "Node", Name: "machine1"},
 		}
-		close(called)
-	})
-
-	s.scheduleOne()
-
-	expectBind = &api.Binding{
-		ObjectMeta: api.ObjectMeta{Name: "bar"},
-		Target:     api.ObjectReference{Kind: "Node", Name: "machine1"},
+		if !reflect.DeepEqual(expectBinding, b) {
+			t.Errorf("binding want=%v, get=%v", expectBinding, b)
+		}
+	case <-time.After(wait.ForeverTestTimeout):
+		t.Fatalf("timeout after %v", wait.ForeverTestTimeout)
 	}
-	if ex, ac := expectBind, gotBinding; !reflect.DeepEqual(ex, ac) {
-		t.Errorf("Expected exact match on binding: %s", util.ObjectDiff(ex, ac))
-	}
-	<-called
-	events.Stop()
+	return scheduler, bindingChan, errChan
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -325,7 +325,13 @@ func (j *JSONPath) evalField(input []reflect.Value, node *FieldNode) ([]reflect.
 				return nil, err
 			}
 		} else if value.Kind() == reflect.Map {
-			result = value.MapIndex(reflect.ValueOf(node.Value))
+			mapKeyType := value.Type().Key()
+			nodeValue := reflect.ValueOf(node.Value)
+			// node value type must be convertible to map key type
+			if !nodeValue.Type().ConvertibleTo(mapKeyType) {
+				return results, fmt.Errorf("%s is not convertible to %s", nodeValue, mapKeyType)
+			}
+			result = value.MapIndex(nodeValue.Convert(mapKeyType))
 		}
 		if result.IsValid() {
 			results = append(results, result)

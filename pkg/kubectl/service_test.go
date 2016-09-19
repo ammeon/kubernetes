@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -399,6 +399,78 @@ func TestGenerateService(t *testing.T) {
 							Port:       443,
 							Protocol:   api.ProtocolTCP,
 							TargetPort: intstr.FromInt(443),
+						},
+					},
+				},
+			},
+		},
+		{
+			generator: ServiceGeneratorV2{},
+			params: map[string]interface{}{
+				"selector":  "foo=bar",
+				"name":      "test",
+				"ports":     "80,8080",
+				"protocols": "8080/UDP",
+			},
+			expected: api.Service{
+				ObjectMeta: api.ObjectMeta{
+					Name: "test",
+				},
+				Spec: api.ServiceSpec{
+					Selector: map[string]string{
+						"foo": "bar",
+					},
+					Ports: []api.ServicePort{
+						{
+							Name:       "port-1",
+							Port:       80,
+							Protocol:   api.ProtocolTCP,
+							TargetPort: intstr.FromInt(80),
+						},
+						{
+							Name:       "port-2",
+							Port:       8080,
+							Protocol:   api.ProtocolUDP,
+							TargetPort: intstr.FromInt(8080),
+						},
+					},
+				},
+			},
+		},
+		{
+			generator: ServiceGeneratorV2{},
+			params: map[string]interface{}{
+				"selector":  "foo=bar",
+				"name":      "test",
+				"ports":     "80,8080,8081",
+				"protocols": "8080/UDP,8081/TCP",
+			},
+			expected: api.Service{
+				ObjectMeta: api.ObjectMeta{
+					Name: "test",
+				},
+				Spec: api.ServiceSpec{
+					Selector: map[string]string{
+						"foo": "bar",
+					},
+					Ports: []api.ServicePort{
+						{
+							Name:       "port-1",
+							Port:       80,
+							Protocol:   api.ProtocolTCP,
+							TargetPort: intstr.FromInt(80),
+						},
+						{
+							Name:       "port-2",
+							Port:       8080,
+							Protocol:   api.ProtocolUDP,
+							TargetPort: intstr.FromInt(8080),
+						},
+						{
+							Name:       "port-3",
+							Port:       8081,
+							Protocol:   api.ProtocolTCP,
+							TargetPort: intstr.FromInt(8081),
 						},
 					},
 				},

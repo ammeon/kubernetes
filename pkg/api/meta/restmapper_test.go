@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ func (fakeConvertor) Convert(in, out interface{}) error {
 	return nil
 }
 
-func (fakeConvertor) ConvertToVersion(in runtime.Object, _ string) (runtime.Object, error) {
+func (fakeConvertor) ConvertToVersion(in runtime.Object, _ unversioned.GroupVersion) (runtime.Object, error) {
 	return in, nil
 }
 

@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,8 +32,8 @@ func TestRecognizer(t *testing.T) {
 	s := runtime.NewScheme()
 	s.AddKnownTypes(unversioned.GroupVersion{Version: "v1"}, &A{})
 	d := NewDecoder(
-		json.NewSerializer(json.DefaultMetaFactory, s, runtime.ObjectTyperToTyper(s), false),
-		json.NewYAMLSerializer(json.DefaultMetaFactory, s, runtime.ObjectTyperToTyper(s)),
+		json.NewSerializer(json.DefaultMetaFactory, s, s, false),
+		json.NewYAMLSerializer(json.DefaultMetaFactory, s, s),
 	)
 	out, _, err := d.Decode([]byte(`
 kind: A

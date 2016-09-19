@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,11 +16,7 @@ limitations under the License.
 
 package storage
 
-import (
-	"testing"
-
-	"k8s.io/kubernetes/pkg/api/errors"
-)
+import "testing"
 
 func TestEtcdParseWatchResourceVersion(t *testing.T) {
 	testCases := []struct {
@@ -42,7 +38,7 @@ func TestEtcdParseWatchResourceVersion(t *testing.T) {
 				t.Errorf("%s: unexpected non-error", testCase.Version)
 				continue
 			}
-			if !errors.IsInvalid(err) {
+			if !IsInvalidError(err) {
 				t.Errorf("%s: unexpected error: %v", testCase.Version, err)
 				continue
 			}

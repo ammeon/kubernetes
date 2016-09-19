@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import (
 	"os"
 )
 
-func ExampleTrailingNewline() {
+func Example_trailingNewline() {
 	ld := NewLineDelimiter(os.Stdout, "|")
 	defer ld.Flush()
 	fmt.Fprint(ld, "  Hello  \n  World  \n")
@@ -30,7 +30,7 @@ func ExampleTrailingNewline() {
 	// |  World  |
 	// ||
 }
-func ExampleNoTrailingNewline() {
+func Example_noTrailingNewline() {
 	ld := NewLineDelimiter(os.Stdout, "|")
 	defer ld.Flush()
 	fmt.Fprint(ld, "  Hello  \n  World  ")

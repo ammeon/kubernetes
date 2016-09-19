@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,7 +41,8 @@ export SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-"192.168.3.0/24"}
 export FLANNEL_NET=${FLANNEL_NET:-"172.16.0.0/16"}
 
 # Admission Controllers to invoke prior to persisting objects in cluster
-export ADMISSION_CONTROL=NamespaceLifecycle,NamespaceExists,LimitRanger,ServiceAccount,ResourceQuota,SecurityContextDeny
+# If we included ResourceQuota, we should keep it at the end of the list to prevent incremeting quota usage prematurely.
+export ADMISSION_CONTROL=NamespaceLifecycle,NamespaceExists,LimitRanger,ServiceAccount,SecurityContextDeny,ResourceQuota
 
 # Extra options to set on the Docker command line.
 # This is useful for setting --insecure-registry for local registries.

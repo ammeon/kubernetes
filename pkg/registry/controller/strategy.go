@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -105,7 +105,7 @@ func (rcStrategy) AllowUnconditionalUpdate() bool {
 func ControllerToSelectableFields(controller *api.ReplicationController) fields.Set {
 	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(controller.ObjectMeta, true)
 	controllerSpecificFieldsSet := fields.Set{
-		"status.replicas": strconv.Itoa(controller.Status.Replicas),
+		"status.replicas": strconv.Itoa(int(controller.Status.Replicas)),
 	}
 	return generic.MergeFieldsSets(objectMetaFieldsSet, controllerSpecificFieldsSet)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,12 +28,12 @@ import (
 // Features of Extensions group are not supported and may be changed or removed in
 // incompatible ways at any time.
 type ExtensionsInterface interface {
-	HorizontalPodAutoscalersNamespacer
 	ScaleNamespacer
 	DaemonSetsNamespacer
 	DeploymentsNamespacer
 	JobsNamespacer
 	IngressNamespacer
+	NetworkPolicyNamespacer
 	ThirdPartyResourceNamespacer
 	ReplicaSetsNamespacer
 	PodSecurityPoliciesInterface
@@ -48,10 +48,6 @@ type ExtensionsClient struct {
 
 func (c *ExtensionsClient) PodSecurityPolicies() PodSecurityPolicyInterface {
 	return newPodSecurityPolicy(c)
-}
-
-func (c *ExtensionsClient) HorizontalPodAutoscalers(namespace string) HorizontalPodAutoscalerInterface {
-	return newHorizontalPodAutoscalers(c, namespace)
 }
 
 func (c *ExtensionsClient) Scales(namespace string) ScaleInterface {
@@ -74,8 +70,12 @@ func (c *ExtensionsClient) Ingress(namespace string) IngressInterface {
 	return newIngress(c, namespace)
 }
 
-func (c *ExtensionsClient) ThirdPartyResources(namespace string) ThirdPartyResourceInterface {
-	return newThirdPartyResources(c, namespace)
+func (c *ExtensionsClient) NetworkPolicies(namespace string) NetworkPolicyInterface {
+	return newNetworkPolicies(c, namespace)
+}
+
+func (c *ExtensionsClient) ThirdPartyResources() ThirdPartyResourceInterface {
+	return newThirdPartyResources(c)
 }
 
 func (c *ExtensionsClient) ReplicaSets(namespace string) ReplicaSetInterface {
@@ -127,11 +127,6 @@ func setExtensionsDefaults(config *restclient.Config) error {
 	//}
 
 	config.Codec = api.Codecs.LegacyCodec(*config.GroupVersion)
-	if config.QPS == 0 {
-		config.QPS = 5
-	}
-	if config.Burst == 0 {
-		config.Burst = 10
-	}
+	config.NegotiatedSerializer = api.Codecs
 	return nil
 }

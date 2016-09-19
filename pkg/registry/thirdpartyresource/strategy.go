@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,19 +33,22 @@ import (
 // strategy implements behavior for ThirdPartyResource objects
 type strategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating ThirdPartyResource
 // objects via the REST API.
-var Strategy = strategy{api.Scheme, api.SimpleNameGenerator}
+var Strategy = strategy{api.Scheme}
 
 var _ = rest.RESTCreateStrategy(Strategy)
 
 var _ = rest.RESTUpdateStrategy(Strategy)
 
 func (strategy) NamespaceScoped() bool {
-	return true
+	return false
+}
+
+func (strategy) GenerateName(base string) string {
+	return ""
 }
 
 func (strategy) PrepareForCreate(obj runtime.Object) {

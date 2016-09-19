@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ func TestCreateSecretGeneric(t *testing.T) {
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/secrets" && m == "POST":
-				return &http.Response{StatusCode: 201, Body: objBody(codec, secretObject)}, nil
+				return &http.Response{StatusCode: 201, Header: defaultHeader(), Body: objBody(codec, secretObject)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 				return nil, nil
@@ -63,7 +63,7 @@ func TestCreateSecretDockerRegistry(t *testing.T) {
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/secrets" && m == "POST":
-				return &http.Response{StatusCode: 201, Body: objBody(codec, secretObject)}, nil
+				return &http.Response{StatusCode: 201, Header: defaultHeader(), Body: objBody(codec, secretObject)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 				return nil, nil

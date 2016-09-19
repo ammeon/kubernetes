@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,11 +30,12 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/apis/batch"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	kubectltesting "k8s.io/kubernetes/pkg/kubectl/testing"
 	"k8s.io/kubernetes/pkg/runtime"
 	yamlserializer "k8s.io/kubernetes/pkg/runtime/serializer/yaml"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/sets"
 
@@ -104,7 +105,7 @@ func TestPrinter(t *testing.T) {
 		},
 	}
 	emptyListTest := &api.PodList{}
-	testapi, err := api.Scheme.ConvertToVersion(podTest, testapi.Default.GroupVersion().String())
+	testapi, err := api.Scheme.ConvertToVersion(podTest, *testapi.Default.GroupVersion())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +183,7 @@ func testPrinter(t *testing.T, printer ResourcePrinter, unmarshalFunc func(data 
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(testData, poutput) {
-		t.Errorf("Test data and unmarshaled data are not equal: %v", util.ObjectDiff(poutput, testData))
+		t.Errorf("Test data and unmarshaled data are not equal: %v", diff.ObjectDiff(poutput, testData))
 	}
 
 	obj := &api.Pod{
@@ -202,7 +203,7 @@ func testPrinter(t *testing.T, printer ResourcePrinter, unmarshalFunc func(data 
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(obj, &objOut) {
-		t.Errorf("Unexpected inequality:\n%v", util.ObjectDiff(obj, &objOut))
+		t.Errorf("Unexpected inequality:\n%v", diff.ObjectDiff(obj, &objOut))
 	}
 }
 
@@ -215,7 +216,12 @@ func TestJSONPrinter(t *testing.T) {
 }
 
 func PrintCustomType(obj *TestPrintType, w io.Writer, options PrintOptions) error {
-	_, err := fmt.Fprintf(w, "%s", obj.Data)
+	data := obj.Data
+	kind := options.KindName
+	if options.WithKind {
+		data = kind + "/" + data
+	}
+	_, err := fmt.Fprintf(w, "%s", data)
 	return err
 }
 
@@ -235,6 +241,25 @@ func TestCustomTypePrinting(t *testing.T) {
 		t.Fatalf("An error occurred printing the custom type: %#v", err)
 	}
 	expectedOutput := "Data\ntest object"
+	if buffer.String() != expectedOutput {
+		t.Errorf("The data was not printed as expected. Expected:\n%s\nGot:\n%s", expectedOutput, buffer.String())
+	}
+}
+
+func TestCustomTypePrintingWithKind(t *testing.T) {
+	columns := []string{"Data"}
+	printer := NewHumanReadablePrinter(false, false, false, false, false, false, []string{})
+	printer.Handler(columns, PrintCustomType)
+	printer.Options.WithKind = true
+	printer.Options.KindName = "test"
+
+	obj := TestPrintType{"test object"}
+	buffer := &bytes.Buffer{}
+	err := printer.PrintObj(&obj, buffer)
+	if err != nil {
+		t.Fatalf("An error occurred printing the custom type: %#v", err)
+	}
+	expectedOutput := "Data\ntest/test object"
 	if buffer.String() != expectedOutput {
 		t.Errorf("The data was not printed as expected. Expected:\n%s\nGot:\n%s", expectedOutput, buffer.String())
 	}
@@ -299,10 +324,10 @@ func TestNamePrinter(t *testing.T) {
 				},
 				Items: []runtime.RawExtension{
 					{
-						RawJSON: []byte(`{"kind": "Pod", "apiVersion": "v1", "metadata": { "name": "foo"}}`),
+						Raw: []byte(`{"kind": "Pod", "apiVersion": "v1", "metadata": { "name": "foo"}}`),
 					},
 					{
-						RawJSON: []byte(`{"kind": "Pod", "apiVersion": "v1", "metadata": { "name": "bar"}}`),
+						Raw: []byte(`{"kind": "Pod", "apiVersion": "v1", "metadata": { "name": "bar"}}`),
 					},
 				},
 			},
@@ -465,7 +490,7 @@ func TestPrinters(t *testing.T) {
 		"template2":            templatePrinter2,
 		"jsonpath":             jsonpathPrinter,
 		"name": &NamePrinter{
-			Typer:   runtime.ObjectTyperToTyper(api.Scheme),
+			Typer:   api.Scheme,
 			Decoder: api.Codecs.UniversalDecoder(),
 		},
 	}
@@ -669,7 +694,7 @@ func TestPrintHunmanReadableIngressWithColumnLabels(t *testing.T) {
 		},
 	}
 	buff := bytes.Buffer{}
-	printIngress(&ingress, &buff, PrintOptions{false, false, false, false, false, false, []string{"app_name"}})
+	printIngress(&ingress, &buff, PrintOptions{false, false, false, false, false, false, false, "", []string{"app_name"}})
 	output := string(buff.Bytes())
 	appName := ingress.ObjectMeta.Labels["app_name"]
 	if !strings.Contains(output, appName) {
@@ -705,7 +730,7 @@ func TestPrintHumanReadableService(t *testing.T) {
 		},
 		{
 			Spec: api.ServiceSpec{
-				ClusterIP: "1.2.3.4",
+				ClusterIP: "1.3.4.5",
 				Ports: []api.ServicePort{
 					{
 						Port:     80,
@@ -724,7 +749,7 @@ func TestPrintHumanReadableService(t *testing.T) {
 		},
 		{
 			Spec: api.ServiceSpec{
-				ClusterIP: "1.2.3.4",
+				ClusterIP: "1.4.5.6",
 				Type:      "LoadBalancer",
 				Ports: []api.ServicePort{
 					{
@@ -753,7 +778,7 @@ func TestPrintHumanReadableService(t *testing.T) {
 		},
 		{
 			Spec: api.ServiceSpec{
-				ClusterIP: "1.2.3.4",
+				ClusterIP: "1.5.6.7",
 				Type:      "LoadBalancer",
 				Ports: []api.ServicePort{
 					{
@@ -790,30 +815,33 @@ func TestPrintHumanReadableService(t *testing.T) {
 	}
 
 	for _, svc := range tests {
-		buff := bytes.Buffer{}
-		printService(&svc, &buff, PrintOptions{false, false, false, false, false, false, []string{}})
-		output := string(buff.Bytes())
-		ip := svc.Spec.ClusterIP
-		if !strings.Contains(output, ip) {
-			t.Errorf("expected to contain ClusterIP %s, but doesn't: %s", ip, output)
-		}
-
-		for _, ingress := range svc.Status.LoadBalancer.Ingress {
-			ip = ingress.IP
+		for _, wide := range []bool{false, true} {
+			buff := bytes.Buffer{}
+			printService(&svc, &buff, PrintOptions{false, false, false, wide, false, false, false, "", []string{}})
+			output := string(buff.Bytes())
+			ip := svc.Spec.ClusterIP
 			if !strings.Contains(output, ip) {
-				t.Errorf("expected to contain ingress ip %s, but doesn't: %s", ip, output)
+				t.Errorf("expected to contain ClusterIP %s, but doesn't: %s", ip, output)
 			}
-		}
 
-		for _, port := range svc.Spec.Ports {
-			portSpec := fmt.Sprintf("%d/%s", port.Port, port.Protocol)
-			if !strings.Contains(output, portSpec) {
-				t.Errorf("expected to contain port: %s, but doesn't: %s", portSpec, output)
+			for n, ingress := range svc.Status.LoadBalancer.Ingress {
+				ip = ingress.IP
+				// For non-wide output, we only guarantee the first IP to be printed
+				if (n == 0 || wide) && !strings.Contains(output, ip) {
+					t.Errorf("expected to contain ingress ip %s with wide=%v, but doesn't: %s", ip, wide, output)
+				}
 			}
-		}
-		// Each service should print on one line
-		if 1 != strings.Count(output, "\n") {
-			t.Errorf("expected a single newline, found %d", strings.Count(output, "\n"))
+
+			for _, port := range svc.Spec.Ports {
+				portSpec := fmt.Sprintf("%d/%s", port.Port, port.Protocol)
+				if !strings.Contains(output, portSpec) {
+					t.Errorf("expected to contain port: %s, but doesn't: %s", portSpec, output)
+				}
+			}
+			// Each service should print on one line
+			if 1 != strings.Count(output, "\n") {
+				t.Errorf("expected a single newline, found %d", strings.Count(output, "\n"))
+			}
 		}
 	}
 }
@@ -1080,7 +1108,7 @@ func TestPrintPod(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printPod(&test.pod, buf, PrintOptions{false, false, false, true, false, false, []string{}})
+		printPod(&test.pod, buf, PrintOptions{false, false, false, false, true, false, false, "", []string{}})
 		// We ignore time
 		if !strings.HasPrefix(buf.String(), test.expect) {
 			t.Fatalf("Expected: %s, got: %s", test.expect, buf.String())
@@ -1173,7 +1201,7 @@ func TestPrintNonTerminatedPod(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printPod(&test.pod, buf, PrintOptions{false, false, false, false, false, false, []string{}})
+		printPod(&test.pod, buf, PrintOptions{false, false, false, false, false, false, false, "", []string{}})
 		// We ignore time
 		if !strings.HasPrefix(buf.String(), test.expect) {
 			t.Fatalf("Expected: %s, got: %s", test.expect, buf.String())
@@ -1233,7 +1261,7 @@ func TestPrintPodWithLabels(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printPod(&test.pod, buf, PrintOptions{false, false, false, false, false, false, test.labelColumns})
+		printPod(&test.pod, buf, PrintOptions{false, false, false, false, false, false, false, "", test.labelColumns})
 		// We ignore time
 		if !strings.HasPrefix(buf.String(), test.startsWith) || !strings.HasSuffix(buf.String(), test.endsWith) {
 			t.Fatalf("Expected to start with: %s and end with: %s, but got: %s", test.startsWith, test.endsWith, buf.String())
@@ -1297,7 +1325,7 @@ func TestPrintDeployment(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printDeployment(&test.deployment, buf, PrintOptions{false, false, false, true, false, false, []string{}})
+		printDeployment(&test.deployment, buf, PrintOptions{false, false, false, false, true, false, false, "", []string{}})
 		if buf.String() != test.expect {
 			t.Fatalf("Expected: %s, got: %s", test.expect, buf.String())
 		}
@@ -1332,7 +1360,7 @@ func TestPrintDaemonSet(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printDaemonSet(&test.ds, buf, PrintOptions{false, false, false, false, false, false, []string{}})
+		printDaemonSet(&test.ds, buf, PrintOptions{false, false, false, false, false, false, false, "", []string{}})
 		if !strings.HasPrefix(buf.String(), test.startsWith) {
 			t.Fatalf("Expected to start with %s but got %s", test.startsWith, buf.String())
 		}
@@ -1341,36 +1369,36 @@ func TestPrintDaemonSet(t *testing.T) {
 }
 
 func TestPrintJob(t *testing.T) {
-	completions := 2
+	completions := int32(2)
 	tests := []struct {
-		job    extensions.Job
+		job    batch.Job
 		expect string
 	}{
 		{
-			extensions.Job{
+			batch.Job{
 				ObjectMeta: api.ObjectMeta{
 					Name:              "job1",
 					CreationTimestamp: unversioned.Time{Time: time.Now().Add(1.9e9)},
 				},
-				Spec: extensions.JobSpec{
+				Spec: batch.JobSpec{
 					Completions: &completions,
 				},
-				Status: extensions.JobStatus{
+				Status: batch.JobStatus{
 					Succeeded: 1,
 				},
 			},
 			"job1\t2\t1\t0s\n",
 		},
 		{
-			extensions.Job{
+			batch.Job{
 				ObjectMeta: api.ObjectMeta{
 					Name:              "job2",
 					CreationTimestamp: unversioned.Time{Time: time.Now().AddDate(-10, 0, 0)},
 				},
-				Spec: extensions.JobSpec{
+				Spec: batch.JobSpec{
 					Completions: nil,
 				},
-				Status: extensions.JobStatus{
+				Status: batch.JobStatus{
 					Succeeded: 0,
 				},
 			},
@@ -1380,7 +1408,7 @@ func TestPrintJob(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printJob(&test.job, buf, PrintOptions{false, false, false, true, false, false, []string{}})
+		printJob(&test.job, buf, PrintOptions{false, false, false, false, true, false, false, "", []string{}})
 		if buf.String() != test.expect {
 			t.Fatalf("Expected: %s, got: %s", test.expect, buf.String())
 		}
@@ -1439,7 +1467,7 @@ func TestPrintPodShowLabels(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 	for _, test := range tests {
-		printPod(&test.pod, buf, PrintOptions{false, false, false, false, test.showLabels, false, []string{}})
+		printPod(&test.pod, buf, PrintOptions{false, false, false, false, false, test.showLabels, false, "", []string{}})
 		// We ignore time
 		if !strings.HasPrefix(buf.String(), test.startsWith) || !strings.HasSuffix(buf.String(), test.endsWith) {
 			t.Fatalf("Expected to start with: %s and end with: %s, but got: %s", test.startsWith, test.endsWith, buf.String())

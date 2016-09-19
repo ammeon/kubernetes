@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ func (r *Reader) handle(ws *websocket.Conn) {
 	encode := len(ws.Config().Protocol) > 0 && ws.Config().Protocol[0] == base64BinaryWebSocketProtocol
 	defer close(r.err)
 	defer ws.Close()
-	go ignoreReceives(ws, r.timeout)
+	go IgnoreReceives(ws, r.timeout)
 	r.err <- messageCopy(ws, r.r, encode, r.ping, r.timeout)
 }
 

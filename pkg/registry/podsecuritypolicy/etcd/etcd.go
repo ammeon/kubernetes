@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,17 +19,15 @@ package etcd
 import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
-	etcdgeneric "k8s.io/kubernetes/pkg/registry/generic/etcd"
+	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/registry/podsecuritypolicy"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
 // REST implements a RESTStorage for PodSecurityPolicies against etcd.
 type REST struct {
-	*etcdgeneric.Etcd
+	*registry.Store
 }
 
 const Prefix = "/podsecuritypolicies"
@@ -40,26 +38,25 @@ func NewREST(opts generic.RESTOptions) *REST {
 	storageInterface := opts.Decorator(
 		opts.Storage, 100, &extensions.PodSecurityPolicy{}, Prefix, podsecuritypolicy.Strategy, newListFunc)
 
-	store := &etcdgeneric.Etcd{
+	store := &registry.Store{
 		NewFunc:     func() runtime.Object { return &extensions.PodSecurityPolicy{} },
 		NewListFunc: newListFunc,
 		KeyRootFunc: func(ctx api.Context) string {
 			return Prefix
 		},
 		KeyFunc: func(ctx api.Context, name string) (string, error) {
-			return etcdgeneric.NoNamespaceKeyFunc(ctx, Prefix, name)
+			return registry.NoNamespaceKeyFunc(ctx, Prefix, name)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*extensions.PodSecurityPolicy).Name, nil
 		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
-			return podsecuritypolicy.MatchPodSecurityPolicy(label, field)
-		},
+		PredicateFunc:           podsecuritypolicy.MatchPodSecurityPolicy,
 		QualifiedResource:       extensions.Resource("podsecuritypolicies"),
 		DeleteCollectionWorkers: opts.DeleteCollectionWorkers,
 
 		CreateStrategy:      podsecuritypolicy.Strategy,
 		UpdateStrategy:      podsecuritypolicy.Strategy,
+		DeleteStrategy:      podsecuritypolicy.Strategy,
 		ReturnDeletedObject: true,
 		Storage:             storageInterface,
 	}

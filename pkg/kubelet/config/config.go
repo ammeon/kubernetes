@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -238,16 +238,7 @@ func (s *podStorage) merge(source string, change interface{}) (adds, updates, de
 			}
 			recordFirstSeenTime(ref)
 			pods[name] = ref
-			// If a pod is not found in the cache, and it's also not in the
-			// pending phase, it implies that kubelet may have restarted.
-			// Treat this pod as update so that kubelet wouldn't reject the
-			// pod in the admission process.
-			if ref.Status.Phase != api.PodPending {
-				updatePods = append(updatePods, ref)
-			} else {
-				// this is an add
-				addPods = append(addPods, ref)
-			}
+			addPods = append(addPods, ref)
 		}
 	}
 

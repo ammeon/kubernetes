@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -286,7 +286,7 @@ func (c *Context) ExecutePackage(outDir string, p Package) error {
 		}
 	}
 	if len(errors) > 0 {
-		return fmt.Errorf("errors in package %q:\n%v\n", p.Name(), strings.Join(errs2strings(errors), "\n"))
+		return fmt.Errorf("errors in package %q:\n%v\n", p.Path(), strings.Join(errs2strings(errors), "\n"))
 	}
 	return nil
 }

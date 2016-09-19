@@ -1,7 +1,7 @@
 // +build integration,!no-etcd
 
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,8 +22,6 @@ package integration
 
 import (
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -36,11 +34,11 @@ import (
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/plugin/pkg/scheduler"
 	_ "k8s.io/kubernetes/plugin/pkg/scheduler/algorithmprovider"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/factory"
+	e2e "k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
@@ -52,36 +50,27 @@ type nodeStateManager struct {
 }
 
 func TestUnschedulableNodes(t *testing.T) {
-	framework.DeleteAllEtcdKeys()
+	_, s := framework.RunAMaster(nil)
+	defer s.Close()
 
-	var m *master.Master
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		m.Handler.ServeHTTP(w, req)
-	}))
-	// TODO: Uncomment when fix #19254
-	// defer s.Close()
-
-	masterConfig := framework.NewIntegrationTestMasterConfig()
-	m, err := master.New(masterConfig)
-	if err != nil {
-		t.Fatalf("Error in bringing up the master: %v", err)
-	}
+	ns := framework.CreateTestingNamespace("unschedulable-nodes", s, t)
+	defer framework.DeleteTestingNamespace(ns, s, t)
 
 	restClient := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
-	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName)
+	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName, api.DefaultHardPodAffinitySymmetricWeight, api.DefaultFailureDomains)
 	schedulerConfig, err := schedulerConfigFactory.Create()
 	if err != nil {
 		t.Fatalf("Couldn't create scheduler config: %v", err)
 	}
 	eventBroadcaster := record.NewBroadcaster()
 	schedulerConfig.Recorder = eventBroadcaster.NewRecorder(api.EventSource{Component: api.DefaultSchedulerName})
-	eventBroadcaster.StartRecordingToSink(restClient.Events(""))
+	eventBroadcaster.StartRecordingToSink(restClient.Events(ns.Name))
 	scheduler.New(schedulerConfig).Run()
 
 	defer close(schedulerConfig.StopEverything)
 
-	DoTestUnschedulableNodes(t, restClient, schedulerConfigFactory.NodeLister.Store)
+	DoTestUnschedulableNodes(t, restClient, ns, schedulerConfigFactory.NodeLister.Store)
 }
 
 func podScheduled(c *client.Client, podNamespace, podName string) wait.ConditionFunc {
@@ -103,16 +92,38 @@ func podScheduled(c *client.Client, podNamespace, podName string) wait.Condition
 
 // Wait till the passFunc confirms that the object it expects to see is in the store.
 // Used to observe reflected events.
-func waitForReflection(s cache.Store, key string, passFunc func(n interface{}) bool) error {
-	return wait.Poll(time.Millisecond*10, time.Second*20, func() (bool, error) {
+func waitForReflection(t *testing.T, s cache.Store, key string, passFunc func(n interface{}) bool) error {
+	nodes := []*api.Node{}
+	err := wait.Poll(time.Millisecond*100, wait.ForeverTestTimeout, func() (bool, error) {
 		if n, _, err := s.GetByKey(key); err == nil && passFunc(n) {
 			return true, nil
+		} else {
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			} else {
+				if n == nil {
+					nodes = append(nodes, nil)
+				} else {
+					nodes = append(nodes, n.(*api.Node))
+				}
+			}
+			return false, nil
 		}
-		return false, nil
 	})
+	if err != nil {
+		t.Logf("Logging consecutive node versions received from store:")
+		for i, n := range nodes {
+			t.Logf("%d: %#v", i, n)
+		}
+	}
+	return err
 }
 
-func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore cache.Store) {
+func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, ns *api.Namespace, nodeStore cache.Store) {
+	// NOTE: This test cannot run in parallel, because it is creating and deleting
+	// non-namespaced objects (Nodes).
+	defer restClient.Nodes().DeleteCollection(nil, api.ListOptions{})
+
 	goodCondition := api.NodeCondition{
 		Type:              api.NodeReady,
 		Status:            api.ConditionTrue,
@@ -159,9 +170,12 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 				if _, err := c.Nodes().Update(n); err != nil {
 					t.Fatalf("Failed to update node with unschedulable=true: %v", err)
 				}
-				err = waitForReflection(s, nodeKey, func(node interface{}) bool {
-					// An unschedulable node should get deleted from the store
-					return node == nil
+				err = waitForReflection(t, s, nodeKey, func(node interface{}) bool {
+					// An unschedulable node should still be present in the store
+					// Nodes that are unschedulable or that are not ready or
+					// have their disk full (Node.Spec.Conditions) are exluded
+					// based on NodeConditionPredicate, a separate check
+					return node != nil && node.(*api.Node).Spec.Unschedulable == true
 				})
 				if err != nil {
 					t.Fatalf("Failed to observe reflected update for setting unschedulable=true: %v", err)
@@ -172,7 +186,7 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 				if _, err := c.Nodes().Update(n); err != nil {
 					t.Fatalf("Failed to update node with unschedulable=false: %v", err)
 				}
-				err = waitForReflection(s, nodeKey, func(node interface{}) bool {
+				err = waitForReflection(t, s, nodeKey, func(node interface{}) bool {
 					return node != nil && node.(*api.Node).Spec.Unschedulable == false
 				})
 				if err != nil {
@@ -192,7 +206,7 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 				if _, err = c.Nodes().UpdateStatus(n); err != nil {
 					t.Fatalf("Failed to update node with bad status condition: %v", err)
 				}
-				err = waitForReflection(s, nodeKey, func(node interface{}) bool {
+				err = waitForReflection(t, s, nodeKey, func(node interface{}) bool {
 					return node != nil && node.(*api.Node).Status.Conditions[0].Status == api.ConditionUnknown
 				})
 				if err != nil {
@@ -209,7 +223,7 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 				if _, err = c.Nodes().UpdateStatus(n); err != nil {
 					t.Fatalf("Failed to update node with healthy status condition: %v", err)
 				}
-				waitForReflection(s, nodeKey, func(node interface{}) bool {
+				err = waitForReflection(t, s, nodeKey, func(node interface{}) bool {
 					return node != nil && node.(*api.Node).Status.Conditions[0].Status == api.ConditionTrue
 				})
 				if err != nil {
@@ -233,10 +247,10 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{Name: "node-scheduling-test-pod"},
 			Spec: api.PodSpec{
-				Containers: []api.Container{{Name: "container", Image: "kubernetes/pause:go"}},
+				Containers: []api.Container{{Name: "container", Image: e2e.GetPauseImageName(restClient)}},
 			},
 		}
-		myPod, err := restClient.Pods(api.NamespaceDefault).Create(pod)
+		myPod, err := restClient.Pods(ns.Name).Create(pod)
 		if err != nil {
 			t.Fatalf("Failed to create pod: %v", err)
 		}
@@ -267,7 +281,7 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 			t.Logf("Test %d: Pod got scheduled on a schedulable node", i)
 		}
 
-		err = restClient.Pods(api.NamespaceDefault).Delete(myPod.Name, api.NewDeleteOptions(0))
+		err = restClient.Pods(ns.Name).Delete(myPod.Name, api.NewDeleteOptions(0))
 		if err != nil {
 			t.Errorf("Failed to delete pod: %v", err)
 		}
@@ -279,20 +293,13 @@ func DoTestUnschedulableNodes(t *testing.T, restClient *client.Client, nodeStore
 }
 
 func TestMultiScheduler(t *testing.T) {
-	framework.DeleteAllEtcdKeys()
-
-	var m *master.Master
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		m.Handler.ServeHTTP(w, req)
-	}))
+	_, s := framework.RunAMaster(nil)
 	// TODO: Uncomment when fix #19254
+	// This seems to be a different issue - it still doesn't work.
 	// defer s.Close()
 
-	masterConfig := framework.NewIntegrationTestMasterConfig()
-	m, err := master.New(masterConfig)
-	if err != nil {
-		t.Fatalf("Error in bringing up the master: %v", err)
-	}
+	ns := framework.CreateTestingNamespace("multi-scheduler", s, t)
+	defer framework.DeleteTestingNamespace(ns, s, t)
 
 	/*
 		This integration tests the multi-scheduler feature in the following way:
@@ -316,14 +323,18 @@ func TestMultiScheduler(t *testing.T) {
 	// 1. create and start default-scheduler
 	restClient := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
-	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName)
+	// NOTE: This test cannot run in parallel, because it is creating and deleting
+	// non-namespaced objects (Nodes).
+	defer restClient.Nodes().DeleteCollection(nil, api.ListOptions{})
+
+	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName, api.DefaultHardPodAffinitySymmetricWeight, api.DefaultFailureDomains)
 	schedulerConfig, err := schedulerConfigFactory.Create()
 	if err != nil {
 		t.Fatalf("Couldn't create scheduler config: %v", err)
 	}
 	eventBroadcaster := record.NewBroadcaster()
 	schedulerConfig.Recorder = eventBroadcaster.NewRecorder(api.EventSource{Component: api.DefaultSchedulerName})
-	eventBroadcaster.StartRecordingToSink(restClient.Events(""))
+	eventBroadcaster.StartRecordingToSink(restClient.Events(ns.Name))
 	scheduler.New(schedulerConfig).Run()
 	// default-scheduler will be stopped later
 
@@ -340,22 +351,22 @@ func TestMultiScheduler(t *testing.T) {
 	restClient.Nodes().Create(node)
 
 	// 3. create 3 pods for testing
-	podWithNoAnnotation := createPod("pod-with-no-annotation", nil)
-	testPodNoAnnotation, err := restClient.Pods(api.NamespaceDefault).Create(podWithNoAnnotation)
+	podWithNoAnnotation := createPod(restClient, "pod-with-no-annotation", nil)
+	testPodNoAnnotation, err := restClient.Pods(ns.Name).Create(podWithNoAnnotation)
 	if err != nil {
 		t.Fatalf("Failed to create pod: %v", err)
 	}
 
 	schedulerAnnotationFitsDefault := map[string]string{"scheduler.alpha.kubernetes.io/name": "default-scheduler"}
-	podWithAnnotationFitsDefault := createPod("pod-with-annotation-fits-default", schedulerAnnotationFitsDefault)
-	testPodWithAnnotationFitsDefault, err := restClient.Pods(api.NamespaceDefault).Create(podWithAnnotationFitsDefault)
+	podWithAnnotationFitsDefault := createPod(restClient, "pod-with-annotation-fits-default", schedulerAnnotationFitsDefault)
+	testPodWithAnnotationFitsDefault, err := restClient.Pods(ns.Name).Create(podWithAnnotationFitsDefault)
 	if err != nil {
 		t.Fatalf("Failed to create pod: %v", err)
 	}
 
 	schedulerAnnotationFitsFoo := map[string]string{"scheduler.alpha.kubernetes.io/name": "foo-scheduler"}
-	podWithAnnotationFitsFoo := createPod("pod-with-annotation-fits-foo", schedulerAnnotationFitsFoo)
-	testPodWithAnnotationFitsFoo, err := restClient.Pods(api.NamespaceDefault).Create(podWithAnnotationFitsFoo)
+	podWithAnnotationFitsFoo := createPod(restClient, "pod-with-annotation-fits-foo", schedulerAnnotationFitsFoo)
+	testPodWithAnnotationFitsFoo, err := restClient.Pods(ns.Name).Create(podWithAnnotationFitsFoo)
 	if err != nil {
 		t.Fatalf("Failed to create pod: %v", err)
 	}
@@ -387,14 +398,14 @@ func TestMultiScheduler(t *testing.T) {
 	// 5. create and start a scheduler with name "foo-scheduler"
 	restClient2 := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
-	schedulerConfigFactory2 := factory.NewConfigFactory(restClient2, "foo-scheduler")
+	schedulerConfigFactory2 := factory.NewConfigFactory(restClient2, "foo-scheduler", api.DefaultHardPodAffinitySymmetricWeight, api.DefaultFailureDomains)
 	schedulerConfig2, err := schedulerConfigFactory2.Create()
 	if err != nil {
 		t.Errorf("Couldn't create scheduler config: %v", err)
 	}
 	eventBroadcaster2 := record.NewBroadcaster()
 	schedulerConfig2.Recorder = eventBroadcaster2.NewRecorder(api.EventSource{Component: "foo-scheduler"})
-	eventBroadcaster2.StartRecordingToSink(restClient2.Events(""))
+	eventBroadcaster2.StartRecordingToSink(restClient2.Events(ns.Name))
 	scheduler.New(schedulerConfig2).Run()
 
 	defer close(schedulerConfig2.StopEverything)
@@ -409,81 +420,86 @@ func TestMultiScheduler(t *testing.T) {
 	}
 
 	//	7. delete the pods that were scheduled by the default scheduler, and stop the default scheduler
-	err = restClient.Pods(api.NamespaceDefault).Delete(testPodNoAnnotation.Name, api.NewDeleteOptions(0))
+	err = restClient.Pods(ns.Name).Delete(testPodNoAnnotation.Name, api.NewDeleteOptions(0))
 	if err != nil {
 		t.Errorf("Failed to delete pod: %v", err)
 	}
-	err = restClient.Pods(api.NamespaceDefault).Delete(testPodWithAnnotationFitsDefault.Name, api.NewDeleteOptions(0))
+	err = restClient.Pods(ns.Name).Delete(testPodWithAnnotationFitsDefault.Name, api.NewDeleteOptions(0))
 	if err != nil {
 		t.Errorf("Failed to delete pod: %v", err)
 	}
-	close(schedulerConfig.StopEverything)
 
-	//	8. create 2 pods: testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2
-	//		- note: these two pods belong to default scheduler which no longer exists
-	podWithNoAnnotation2 := createPod("pod-with-no-annotation2", nil)
-	podWithAnnotationFitsDefault2 := createPod("pod-with-annotation-fits-default2", schedulerAnnotationFitsDefault)
-	testPodNoAnnotation2, err := restClient.Pods(api.NamespaceDefault).Create(podWithNoAnnotation2)
-	if err != nil {
-		t.Fatalf("Failed to create pod: %v", err)
-	}
-	testPodWithAnnotationFitsDefault2, err := restClient.Pods(api.NamespaceDefault).Create(podWithAnnotationFitsDefault2)
-	if err != nil {
-		t.Fatalf("Failed to create pod: %v", err)
-	}
+	// The rest of this test assumes that closing StopEverything will cause the
+	// scheduler thread to stop immediately.  It won't, and in fact it will often
+	// schedule 1 more pod before finally exiting.  Comment out until we fix that.
+	//
+	// See https://github.com/kubernetes/kubernetes/issues/23715 for more details.
 
-	//	9. **check point-3**:
-	//		- testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2 shoule NOT be scheduled
-	err = wait.Poll(time.Second, time.Second*5, podScheduled(restClient, testPodNoAnnotation2.Namespace, testPodNoAnnotation2.Name))
-	if err == nil {
-		t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodNoAnnotation2.Name, err)
-	} else {
-		t.Logf("Test MultiScheduler: %s Pod not scheduled", testPodNoAnnotation2.Name)
-	}
-	err = wait.Poll(time.Second, time.Second*5, podScheduled(restClient, testPodWithAnnotationFitsDefault2.Namespace, testPodWithAnnotationFitsDefault2.Name))
-	if err == nil {
-		t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodWithAnnotationFitsDefault2.Name, err)
-	} else {
-		t.Logf("Test MultiScheduler: %s Pod scheduled", testPodWithAnnotationFitsDefault2.Name)
-	}
+	/*
+		close(schedulerConfig.StopEverything)
+
+		//	8. create 2 pods: testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2
+		//		- note: these two pods belong to default scheduler which no longer exists
+		podWithNoAnnotation2 := createPod("pod-with-no-annotation2", nil)
+		podWithAnnotationFitsDefault2 := createPod("pod-with-annotation-fits-default2", schedulerAnnotationFitsDefault)
+		testPodNoAnnotation2, err := restClient.Pods(ns.Name).Create(podWithNoAnnotation2)
+		if err != nil {
+			t.Fatalf("Failed to create pod: %v", err)
+		}
+		testPodWithAnnotationFitsDefault2, err := restClient.Pods(ns.Name).Create(podWithAnnotationFitsDefault2)
+		if err != nil {
+			t.Fatalf("Failed to create pod: %v", err)
+		}
+
+		//	9. **check point-3**:
+		//		- testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2 shoule NOT be scheduled
+		err = wait.Poll(time.Second, time.Second*5, podScheduled(restClient, testPodNoAnnotation2.Namespace, testPodNoAnnotation2.Name))
+		if err == nil {
+			t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodNoAnnotation2.Name, err)
+		} else {
+			t.Logf("Test MultiScheduler: %s Pod not scheduled", testPodNoAnnotation2.Name)
+		}
+		err = wait.Poll(time.Second, time.Second*5, podScheduled(restClient, testPodWithAnnotationFitsDefault2.Namespace, testPodWithAnnotationFitsDefault2.Name))
+		if err == nil {
+			t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodWithAnnotationFitsDefault2.Name, err)
+		} else {
+			t.Logf("Test MultiScheduler: %s Pod scheduled", testPodWithAnnotationFitsDefault2.Name)
+		}
+	*/
 }
 
-func createPod(name string, annotation map[string]string) *api.Pod {
+func createPod(client *client.Client, name string, annotation map[string]string) *api.Pod {
 	return &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: name, Annotations: annotation},
 		Spec: api.PodSpec{
-			Containers: []api.Container{{Name: "container", Image: "kubernetes/pause:go"}},
+			Containers: []api.Container{{Name: "container", Image: e2e.GetPauseImageName(client)}},
 		},
 	}
 }
 
 // This test will verify scheduler can work well regardless of whether kubelet is allocatable aware or not.
 func TestAllocatable(t *testing.T) {
-	framework.DeleteAllEtcdKeys()
-
-	var m *master.Master
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		m.Handler.ServeHTTP(w, req)
-	}))
+	_, s := framework.RunAMaster(nil)
 	defer s.Close()
 
-	masterConfig := framework.NewIntegrationTestMasterConfig()
-	m, err := master.New(masterConfig)
-	if err != nil {
-		t.Fatalf("Error in bringing up the master: %v", err)
-	}
+	ns := framework.CreateTestingNamespace("allocatable", s, t)
+	defer framework.DeleteTestingNamespace(ns, s, t)
 
 	// 1. create and start default-scheduler
 	restClient := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
-	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName)
+	// NOTE: This test cannot run in parallel, because it is creating and deleting
+	// non-namespaced objects (Nodes).
+	defer restClient.Nodes().DeleteCollection(nil, api.ListOptions{})
+
+	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName, api.DefaultHardPodAffinitySymmetricWeight, api.DefaultFailureDomains)
 	schedulerConfig, err := schedulerConfigFactory.Create()
 	if err != nil {
 		t.Fatalf("Couldn't create scheduler config: %v", err)
 	}
 	eventBroadcaster := record.NewBroadcaster()
 	schedulerConfig.Recorder = eventBroadcaster.NewRecorder(api.EventSource{Component: api.DefaultSchedulerName})
-	eventBroadcaster.StartRecordingToSink(restClient.Events(""))
+	eventBroadcaster.StartRecordingToSink(restClient.Events(ns.Name))
 	scheduler.New(schedulerConfig).Run()
 	// default-scheduler will be stopped later
 	defer close(schedulerConfig.StopEverything)
@@ -513,7 +529,7 @@ func TestAllocatable(t *testing.T) {
 			Containers: []api.Container{
 				{
 					Name:  "container",
-					Image: "kubernetes/pause:go",
+					Image: e2e.GetPauseImageName(restClient),
 					Resources: api.ResourceRequirements{
 						Requests: api.ResourceList{
 							api.ResourceCPU:    *resource.NewMilliQuantity(20, resource.DecimalSI),
@@ -525,7 +541,7 @@ func TestAllocatable(t *testing.T) {
 		},
 	}
 
-	testAllocPod, err := restClient.Pods(api.NamespaceDefault).Create(podResource)
+	testAllocPod, err := restClient.Pods(ns.Name).Create(podResource)
 	if err != nil {
 		t.Fatalf("Test allocatable unawareness failed to create pod: %v", err)
 	}
@@ -556,13 +572,13 @@ func TestAllocatable(t *testing.T) {
 		t.Fatalf("Failed to update node with Status.Allocatable: %v", err)
 	}
 
-	if err := restClient.Pods(api.NamespaceDefault).Delete(podResource.Name, &api.DeleteOptions{}); err != nil {
+	if err := restClient.Pods(ns.Name).Delete(podResource.Name, &api.DeleteOptions{}); err != nil {
 		t.Fatalf("Failed to remove first resource pod: %v", err)
 	}
 
 	// 6. Make another pod with different name, same resource request
 	podResource.ObjectMeta.Name = "pod-test-allocatable2"
-	testAllocPod2, err := restClient.Pods(api.NamespaceDefault).Create(podResource)
+	testAllocPod2, err := restClient.Pods(ns.Name).Create(podResource)
 	if err != nil {
 		t.Fatalf("Test allocatable awareness failed to create pod: %v", err)
 	}

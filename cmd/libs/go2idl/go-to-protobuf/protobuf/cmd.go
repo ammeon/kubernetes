@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -54,17 +54,28 @@ func New() *Generator {
 		OutputBase:       sourceTree,
 		GoHeaderFilePath: filepath.Join(sourceTree, "k8s.io/kubernetes/hack/boilerplate/boilerplate.go.txt"),
 	}
-	defaultProtoImport := filepath.Join(sourceTree, "k8s.io", "kubernetes", "Godeps", "_workspace", "src", "github.com", "gogo", "protobuf", "protobuf")
+	defaultProtoImport := filepath.Join(sourceTree, "k8s.io", "kubernetes", "vendor", "github.com", "gogo", "protobuf", "protobuf")
 	return &Generator{
 		Common:      common,
 		OutputBase:  sourceTree,
 		ProtoImport: []string{defaultProtoImport},
-		Packages: `+k8s.io/kubernetes/pkg/util/intstr,` +
-			`+k8s.io/kubernetes/pkg/api/resource,` +
-			`+k8s.io/kubernetes/pkg/runtime,` +
-			`k8s.io/kubernetes/pkg/api/unversioned,` +
-			`k8s.io/kubernetes/pkg/api/v1,` +
+		Packages: strings.Join([]string{
+			`+k8s.io/kubernetes/pkg/util/intstr`,
+			`+k8s.io/kubernetes/pkg/api/resource`,
+			`+k8s.io/kubernetes/pkg/runtime`,
+			`+k8s.io/kubernetes/pkg/watch/versioned`,
+			`k8s.io/kubernetes/pkg/api/unversioned`,
+			`k8s.io/kubernetes/pkg/api/v1`,
+			`k8s.io/kubernetes/pkg/apis/policy/v1alpha1`,
 			`k8s.io/kubernetes/pkg/apis/extensions/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/autoscaling/v1`,
+			`k8s.io/kubernetes/pkg/apis/batch/v1`,
+			`k8s.io/kubernetes/pkg/apis/batch/v2alpha1`,
+			`k8s.io/kubernetes/pkg/apis/apps/v1alpha1`,
+			`k8s.io/kubernetes/pkg/apis/rbac/v1alpha1`,
+			`k8s.io/kubernetes/federation/apis/federation/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/certificates/v1alpha1`,
+		}, ","),
 		DropEmbeddedFields: "k8s.io/kubernetes/pkg/api/unversioned.TypeMeta",
 	}
 }
@@ -82,10 +93,6 @@ func (g *Generator) BindFlags(flag *flag.FlagSet) {
 	flag.BoolVar(&g.SkipGeneratedRewrite, "skip-generated-rewrite", g.SkipGeneratedRewrite, "If true, skip fixing up the generated.pb.go file (debugging only).")
 	flag.StringVar(&g.DropEmbeddedFields, "drop-embedded-fields", g.DropEmbeddedFields, "Comma-delimited list of embedded Go types to omit from generated protobufs")
 }
-
-const (
-	typesKindProtobuf = "Protobuf"
-)
 
 func Run(g *Generator) {
 	if g.Common.VerifyOnly {
@@ -118,6 +125,9 @@ func Run(g *Generator) {
 	protobufNames := NewProtobufNamer()
 	outputPackages := generator.Packages{}
 	for _, d := range strings.Split(g.Packages, ",") {
+		if strings.Contains(d, "-") {
+			log.Fatalf("Package names must be valid protobuf package identifiers, which allow only [a-z0-9_]: %s", d)
+		}
 		generateAllTypes, outputPackage := true, true
 		switch {
 		case strings.HasPrefix(d, "+"):
@@ -229,7 +239,7 @@ func Run(g *Generator) {
 
 		// alter the generated protobuf file to remove the generated types (but leave the serializers) and rewrite the
 		// package statement to match the desired package name
-		if err := RewriteGeneratedGogoProtobufFile(outputPath, p.ExtractGeneratedType, buf.Bytes()); err != nil {
+		if err := RewriteGeneratedGogoProtobufFile(outputPath, p.ExtractGeneratedType, p.OptionalTypeName, buf.Bytes()); err != nil {
 			log.Fatalf("Unable to rewrite generated %s: %v", outputPath, err)
 		}
 

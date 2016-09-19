@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,8 +28,9 @@ import (
 // of the factory methods that the time package offers.
 //
 // +protobuf.options.marshal=false
+// +protobuf.as=Timestamp
 type Time struct {
-	time.Time `protobuf:"Timestamp,1,req,name=time"`
+	time.Time `protobuf:"-"`
 }
 
 // NewTime returns a wrapped instance of the provided time

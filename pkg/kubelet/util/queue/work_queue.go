@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -41,9 +41,9 @@ type basicWorkQueue struct {
 
 var _ WorkQueue = &basicWorkQueue{}
 
-func NewBasicWorkQueue() WorkQueue {
+func NewBasicWorkQueue(clock util.Clock) WorkQueue {
 	queue := make(map[types.UID]time.Time)
-	return &basicWorkQueue{queue: queue, clock: util.RealClock{}}
+	return &basicWorkQueue{queue: queue, clock: clock}
 }
 
 func (q *basicWorkQueue) GetWork() []types.UID {

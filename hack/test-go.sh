@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,6 @@ kube::test::find_dirs() {
           -path './_artifacts/*' \
           -o -path './_output/*' \
           -o -path './_gopath/*' \
-          -o -path './Godeps/*' \
           -o -path './contrib/podex/*' \
           -o -path './output/*' \
           -o -path './release/*' \
@@ -40,12 +39,13 @@ kube::test::find_dirs() {
           -o -path './test/e2e_node/*' \
           -o -path './test/integration/*' \
           -o -path './test/component/scheduler/perf/*' \
+          -o -path './third_party/*'\
+          -o -path './vendor/*'\
         \) -prune \
       \) -name '*_test.go' -print0 | xargs -0n1 dirname | sed 's|^\./||' | sort -u
   )
 }
 
-# -covermode=atomic becomes default with -race in Go >=1.3
 KUBE_TIMEOUT=${KUBE_TIMEOUT:--timeout 120s}
 KUBE_COVER=${KUBE_COVER:-n} # set to 'y' to enable coverage collection
 KUBE_COVERMODE=${KUBE_COVERMODE:-atomic}
@@ -58,11 +58,10 @@ KUBE_GOVERALLS_BIN=${KUBE_GOVERALLS_BIN:-}
 # Lists of API Versions of each groups that should be tested, groups are
 # separated by comma, lists are separated by semicolon. e.g.,
 # "v1,compute/v1alpha1,experimental/v1alpha2;v1,compute/v2,experimental/v1alpha3"
-KUBE_TEST_API_VERSIONS=${KUBE_TEST_API_VERSIONS:-"v1,extensions/v1beta1,metrics/v1alpha1;v1,autoscaling/v1,batch/v1,extensions/v1beta1,metrics/v1alpha1"}
+# FIXME: due to current implementation of a test client (see: pkg/api/testapi/testapi.go)
+# ONLY the last version is tested in each group.
+KUBE_TEST_API_VERSIONS=${KUBE_TEST_API_VERSIONS:-"v1,autoscaling/v1,batch/v1,batch/v2alpha1,extensions/v1beta1,apps/v1alpha1,federation/v1beta1,policy/v1alpha1,rbac.authorization.k8s.io/v1alpha1,certificates/v1alpha1"}
 # once we have multiple group supports
-# Run tests with the standard (registry) and a custom etcd prefix
-# (kubernetes.io/registry).
-KUBE_TEST_ETCD_PREFIXES=${KUBE_TEST_ETCD_PREFIXES:-"registry,kubernetes.io/registry"}
 # Create a junit-style XML test report in this directory if set.
 KUBE_JUNIT_REPORT_DIR=${KUBE_JUNIT_REPORT_DIR:-}
 # Set to 'y' to keep the verbose stdout from tests when KUBE_JUNIT_REPORT_DIR is
@@ -75,7 +74,6 @@ usage: $0 [OPTIONS] [TARGETS]
 
 OPTIONS:
   -p <number>   : number of parallel workers, must be >= 1
-  -i <number>   : number of times to run each test per worker, must be >= 1
 EOF
 }
 
@@ -83,7 +81,6 @@ isnum() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
-iterations=1
 parallel=1
 while getopts "hp:i:" opt ; do
   case $opt in
@@ -100,12 +97,9 @@ while getopts "hp:i:" opt ; do
       fi
       ;;
     i)
-      iterations="$OPTARG"
-      if ! isnum "${iterations}" || [[ "${iterations}" -le 0 ]]; then
-        kube::log::usage "'$0': argument to -i must be numeric and greater than 0"
-        kube::test::usage
-        exit 1
-      fi
+      kube::log::usage "'$0': use GOFLAGS='-count <num-iterations>'"
+      kube::test::usage
+      exit 1
       ;;
     ?)
       kube::test::usage
@@ -181,50 +175,7 @@ produceJUnitXMLReport() {
   kube::log::status "Saved JUnit XML test report to ${junit_xml_filename}"
 }
 
-runTestIterations() {
-  local worker=$1
-  shift
-  kube::log::status "Worker ${worker}: Running ${iterations} times"
-  for arg; do
-    trap 'exit 1' SIGINT
-    local pkg=${KUBE_GO_PACKAGE}/${arg}
-    kube::log::status "${pkg}"
-    # keep going, even if there are failures
-    local pass=0
-    local count=0
-    for i in $(seq 1 ${iterations}); do
-      if go test "${goflags[@]:+${goflags[@]}}" \
-          ${KUBE_RACE} ${KUBE_TIMEOUT} "${pkg}" \
-          "${testargs[@]:+${testargs[@]}}"; then
-        pass=$((pass + 1))
-      else
-        ITERATION_FAILURES=$((ITERATION_FAILURES + 1))
-      fi
-      count=$((count + 1))
-    done 2>&1
-    kube::log::status "Worker ${worker}: ${pass} / ${count} passed"
-  done
-  return 0
-}
-
 runTests() {
-  # TODO: this should probably be refactored to avoid code duplication with the
-  # coverage version.
-  if [[ $iterations -gt 1 ]]; then
-    ITERATION_FAILURES=0 # purposely non-local
-    if [[ $# -eq 0 ]]; then
-      set -- $(kube::test::find_dirs)
-    fi
-    for p in $(seq 1 ${parallel}); do
-      runTestIterations ${p} "$@" &
-    done
-    wait
-    if [[ ${ITERATION_FAILURES} -gt 0 ]]; then
-      return 1
-    fi
-    return 0
-  fi
-
   local junit_filename_prefix
   junit_filename_prefix=$(junitFilenamePrefix)
 
@@ -256,7 +207,9 @@ runTests() {
   # must make sure the output from parallel runs is not mixed. To achieve this,
   # we spawn a subshell for each parallel process, redirecting the output to
   # separate files.
-  printf "%s\n" "${@}" | xargs -I{} -n1 -P${KUBE_COVERPROCS} \
+  # cmd/libs/go2idl/generator is fragile when run under coverage, so ignore it for now.
+  # see: https://github.com/kubernetes/kubernetes/issues/24967
+  printf "%s\n" "${@}" | grep -v "cmd/libs/go2idl/generator"| xargs -I{} -n1 -P${KUBE_COVERPROCS} \
     bash -c "set -o pipefail; _pkg=\"{}\"; _pkg_out=\${_pkg//\//_}; \
         go test ${goflags[@]:+${goflags[@]}} \
           ${KUBE_RACE} \
@@ -316,31 +269,12 @@ checkFDs
 
 # Convert the CSVs to arrays.
 IFS=';' read -a apiVersions <<< "${KUBE_TEST_API_VERSIONS}"
-IFS=',' read -a etcdPrefixes <<< "${KUBE_TEST_ETCD_PREFIXES}"
 apiVersionsCount=${#apiVersions[@]}
-etcdPrefixesCount=${#etcdPrefixes[@]}
-for (( i=0, j=0; ; )); do
+for (( i=0; i<${apiVersionsCount}; i++ )); do
   apiVersion=${apiVersions[i]}
-  etcdPrefix=${etcdPrefixes[j]}
-  echo "Running tests for APIVersion: $apiVersion with etcdPrefix: $etcdPrefix"
-  # KUBE_TEST_API sets the version of each group to be tested. KUBE_API_VERSIONS
-  # register the groups/versions as supported by k8s. So KUBE_API_VERSIONS
-  # needs to be the superset of KUBE_TEST_API.
-  KUBE_TEST_API="${apiVersion}" KUBE_API_VERSIONS="v1,autoscaling/v1,batch/v1,extensions/v1beta1,componentconfig/v1alpha1,metrics/v1alpha1,authorization.k8s.io/v1beta1" ETCD_PREFIX=${etcdPrefix} runTests "$@"
-  i=${i}+1
-  j=${j}+1
-  if [[ i -eq ${apiVersionsCount} ]] && [[ j -eq ${etcdPrefixesCount} ]]; then
-    # All api versions and etcd prefixes tested.
-    break
-  fi
-  if [[ i -eq ${apiVersionsCount} ]]; then
-    # Use the last api version for remaining etcd prefixes.
-    i=${i}-1
-  fi
-   if [[ j -eq ${etcdPrefixesCount} ]]; then
-     # Use the last etcd prefix for remaining api versions.
-    j=${j}-1
-  fi
+  echo "Running tests for APIVersion: $apiVersion"
+  # KUBE_TEST_API sets the version of each group to be tested.
+  KUBE_TEST_API="${apiVersion}" runTests "$@"
 done
 
 # We might run the tests for multiple versions, but we want to report only

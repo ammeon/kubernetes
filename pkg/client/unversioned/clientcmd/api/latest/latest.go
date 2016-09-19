@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -40,9 +40,15 @@ const OldestVersion = "v1"
 // with a set of versions to choose.
 var Versions = []string{"v1"}
 
-var Codec = versioning.NewCodecForScheme(
-	api.Scheme,
-	json.NewYAMLSerializer(json.DefaultMetaFactory, api.Scheme, runtime.ObjectTyperToTyper(api.Scheme)),
-	[]unversioned.GroupVersion{{Version: Version}},
-	[]unversioned.GroupVersion{{Version: runtime.APIVersionInternal}},
-)
+var Codec runtime.Codec
+
+func init() {
+	yamlSerializer := json.NewYAMLSerializer(json.DefaultMetaFactory, api.Scheme, api.Scheme)
+	Codec = versioning.NewCodecForScheme(
+		api.Scheme,
+		yamlSerializer,
+		yamlSerializer,
+		[]unversioned.GroupVersion{{Version: Version}},
+		[]unversioned.GroupVersion{{Version: runtime.APIVersionInternal}},
+	)
+}

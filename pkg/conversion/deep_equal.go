@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ type Equalities struct {
 	reflect.Equalities
 }
 
-// For convenience, panics on errrors
+// For convenience, panics on errors
 func EqualitiesOrDie(funcs ...interface{}) Equalities {
 	e := Equalities{reflect.Equalities{}}
 	if err := e.AddFuncs(funcs...); err != nil {

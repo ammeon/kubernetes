@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -369,16 +369,6 @@ function ssh-to-node {
       echo "$node is an unknown machine to ssh to" >&2
   fi
   ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no "core@$machine" "$cmd"
-}
-
-# Restart the kube-proxy on a node ($1)
-function restart-kube-proxy {
-  ssh-to-node "$1" "sudo systemctl restart kube-proxy"
-}
-
-# Restart the apiserver
-function restart-apiserver {
-  ssh-to-node "$1" "sudo systemctl restart kube-apiserver"
 }
 
 # Perform preparations required to run e2e tests

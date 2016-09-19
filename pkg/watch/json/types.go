@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -49,5 +49,5 @@ func Object(encoder runtime.Encoder, event *watch.Event) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WatchEvent{event.Type, runtime.RawExtension{RawJSON: json.RawMessage(data)}}, nil
+	return &WatchEvent{event.Type, runtime.RawExtension{Raw: json.RawMessage(data)}}, nil
 }

@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/examples/guidelines.md).
+[here](http://releases.k8s.io/release-1.3/examples/guidelines.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -110,7 +110,8 @@ Examples are not:
 * When providing an example command or config for which the user is
   expected to substitute text with something specific to them, use
   angle brackets: `<IDENTIFIER>` for the text to be substituted.
-
+* Use `kubectl` instead of `cluster\kubectl.sh` for example cli
+  commands.
 
 ### At the end
 

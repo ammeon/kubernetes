@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -40,11 +40,10 @@ func TestSetKubernetesDefaults(t *testing.T) {
 			restclient.Config{
 				APIPath: "/api",
 				ContentConfig: restclient.ContentConfig{
-					GroupVersion: testapi.Default.GroupVersion(),
-					Codec:        testapi.Default.Codec(),
+					GroupVersion:         testapi.Default.GroupVersion(),
+					Codec:                testapi.Default.Codec(),
+					NegotiatedSerializer: testapi.Default.NegotiatedSerializer(),
 				},
-				QPS:   5,
-				Burst: 10,
 			},
 			false,
 		},
@@ -124,9 +123,8 @@ func TestHelperGetServerAPIVersions(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(output)
 	}))
-	// TODO: Uncomment when fix #19254
-	// defer server.Close()
-	got, err := restclient.ServerAPIVersions(&restclient.Config{Host: server.URL, ContentConfig: restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "invalid version", Version: "one"}, Codec: testapi.Default.Codec()}})
+	defer server.Close()
+	got, err := restclient.ServerAPIVersions(&restclient.Config{Host: server.URL, ContentConfig: restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "invalid version", Version: "one"}, NegotiatedSerializer: testapi.Default.NegotiatedSerializer()}})
 	if err != nil {
 		t.Fatalf("unexpected encoding error: %v", err)
 	}

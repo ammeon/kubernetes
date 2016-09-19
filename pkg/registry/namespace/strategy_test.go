@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -75,7 +75,7 @@ func TestNamespaceStatusStrategy(t *testing.T) {
 	}
 	now := unversioned.Now()
 	oldNamespace := &api.Namespace{
-		ObjectMeta: api.ObjectMeta{Name: "foo", ResourceVersion: "10"},
+		ObjectMeta: api.ObjectMeta{Name: "foo", ResourceVersion: "10", DeletionTimestamp: &now},
 		Spec:       api.NamespaceSpec{Finalizers: []api.FinalizerName{"kubernetes"}},
 		Status:     api.NamespaceStatus{Phase: api.NamespaceActive},
 	}

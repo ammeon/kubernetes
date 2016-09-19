@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,31 +20,33 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/docker/docker/pkg/term"
 	"github.com/golang/glog"
+	"github.com/renstrom/dedent"
 	"github.com/spf13/cobra"
+
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/remotecommand"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	remotecommandserver "k8s.io/kubernetes/pkg/kubelet/server/remotecommand"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
+	"k8s.io/kubernetes/pkg/util/interrupt"
+	"k8s.io/kubernetes/pkg/util/term"
 )
 
-const (
-	attach_example = `# Get output from running pod 123456-7890, using the first container by default
-kubectl attach 123456-7890
+var (
+	attach_example = dedent.Dedent(`
+		# Get output from running pod 123456-7890, using the first container by default
+		kubectl attach 123456-7890
 
-# Get output from ruby-container from pod 123456-7890
-kubectl attach 123456-7890 -c ruby-container
+		# Get output from ruby-container from pod 123456-7890
+		kubectl attach 123456-7890 -c ruby-container
 
-# Switch to raw terminal mode, sends stdin to 'bash' in ruby-container from pod 123456-7890
-# and sends stdout/stderr from 'bash' back to the client
-kubectl attach 123456-7890 -c ruby-container -i -t`
+		# Switch to raw terminal mode, sends stdin to 'bash' in ruby-container from pod 123456-7890
+		# and sends stdout/stderr from 'bash' back to the client
+		kubectl attach 123456-7890 -c ruby-container -i -t`)
 )
 
 func NewCmdAttach(f *cmdutil.Factory, cmdIn io.Reader, cmdOut, cmdErr io.Writer) *cobra.Command {
@@ -57,7 +59,7 @@ func NewCmdAttach(f *cmdutil.Factory, cmdIn io.Reader, cmdOut, cmdErr io.Writer)
 	}
 	cmd := &cobra.Command{
 		Use:     "attach POD -c CONTAINER",
-		Short:   "Attach to a running container.",
+		Short:   "Attach to a running container",
 		Long:    "Attach to a process that is already running inside an existing container.",
 		Example: attach_example,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -86,7 +88,7 @@ func (*DefaultRemoteAttach) Attach(method string, url *url.URL, config *restclie
 	if err != nil {
 		return err
 	}
-	return exec.Stream(stdin, stdout, stderr, tty)
+	return exec.Stream(remotecommandserver.SupportedStreamingProtocols, stdin, stdout, stderr, tty)
 }
 
 // AttachOptions declare the arguments accepted by the Exec command
@@ -96,10 +98,16 @@ type AttachOptions struct {
 	ContainerName string
 	Stdin         bool
 	TTY           bool
+	CommandName   string
+
+	// InterruptParent, if set, is used to handle interrupts while attached
+	InterruptParent *interrupt.Handler
 
 	In  io.Reader
 	Out io.Writer
 	Err io.Writer
+
+	Pod *api.Pod
 
 	Attach RemoteAttach
 	Client *client.Client
@@ -134,6 +142,10 @@ func (p *AttachOptions) Complete(f *cmdutil.Factory, cmd *cobra.Command, argsIn 
 	}
 	p.Client = client
 
+	if p.CommandName == "" {
+		p.CommandName = cmd.CommandPath()
+	}
+
 	return nil
 }
 
@@ -154,99 +166,100 @@ func (p *AttachOptions) Validate() error {
 
 // Run executes a validated remote execution against a pod.
 func (p *AttachOptions) Run() error {
-	pod, err := p.Client.Pods(p.Namespace).Get(p.PodName)
-	if err != nil {
-		return err
-	}
+	if p.Pod == nil {
+		pod, err := p.Client.Pods(p.Namespace).Get(p.PodName)
+		if err != nil {
+			return err
+		}
 
-	if pod.Status.Phase != api.PodRunning {
-		return fmt.Errorf("pod %s is not running and cannot be attached to; current phase is %s", p.PodName, pod.Status.Phase)
-	}
+		if pod.Status.Phase == api.PodSucceeded || pod.Status.Phase == api.PodFailed {
+			return fmt.Errorf("cannot attach a container in a completed pod; current phase is %s", pod.Status.Phase)
+		}
 
-	var stdin io.Reader
+		p.Pod = pod
+		// TODO: convert this to a clean "wait" behavior
+	}
+	pod := p.Pod
+
+	// ensure we can recover the terminal while attached
+	t := term.TTY{Parent: p.InterruptParent}
+
+	// check for TTY
 	tty := p.TTY
-
-	containerToAttach := p.GetContainer(pod)
+	containerToAttach, err := p.containerToAttachTo(pod)
+	if err != nil {
+		return fmt.Errorf("cannot attach to the container: %v", err)
+	}
 	if tty && !containerToAttach.TTY {
 		tty = false
-		fmt.Fprintf(p.Err, "Unable to use a TTY - container %s doesn't allocate one\n", containerToAttach.Name)
+		fmt.Fprintf(p.Err, "Unable to use a TTY - container %s did not allocate one\n", containerToAttach.Name)
 	}
-
-	// TODO: refactor with terminal helpers from the edit utility once that is merged
 	if p.Stdin {
-		stdin = p.In
-		if tty {
-			if file, ok := stdin.(*os.File); ok {
-				inFd := file.Fd()
-				if term.IsTerminal(inFd) {
-					oldState, err := term.SetRawTerminal(inFd)
-					if err != nil {
-						glog.Fatal(err)
-					}
-					fmt.Fprintln(p.Out, "\nHit enter for command prompt")
-					// this handles a clean exit, where the command finished
-					defer term.RestoreTerminal(inFd, oldState)
-
-					// SIGINT is handled by term.SetRawTerminal (it runs a goroutine that listens
-					// for SIGINT and restores the terminal before exiting)
-
-					// this handles SIGTERM
-					sigChan := make(chan os.Signal, 1)
-					signal.Notify(sigChan, syscall.SIGTERM)
-					go func() {
-						<-sigChan
-						term.RestoreTerminal(inFd, oldState)
-						os.Exit(0)
-					}()
-				} else {
-					fmt.Fprintln(p.Err, "STDIN is not a terminal")
-				}
-			} else {
-				tty = false
-				fmt.Fprintln(p.Err, "Unable to use a TTY - input is not the right kind of file")
-			}
+		t.In = p.In
+		if tty && !t.IsTerminal() {
+			tty = false
+			fmt.Fprintln(p.Err, "Unable to use a TTY - input is not a terminal or the right kind of file")
 		}
 	}
+	t.Raw = tty
 
-	// TODO: consider abstracting into a client invocation or client helper
-	req := p.Client.RESTClient.Post().
-		Resource("pods").
-		Name(pod.Name).
-		Namespace(pod.Namespace).
-		SubResource("attach")
-	req.VersionedParams(&api.PodAttachOptions{
-		Container: containerToAttach.Name,
-		Stdin:     stdin != nil,
-		Stdout:    p.Out != nil,
-		Stderr:    p.Err != nil,
-		TTY:       tty,
-	}, api.ParameterCodec)
+	fn := func() error {
+		if tty {
+			fmt.Fprintln(p.Out, "\nHit enter for command prompt")
+		}
+		// TODO: consider abstracting into a client invocation or client helper
+		req := p.Client.RESTClient.Post().
+			Resource("pods").
+			Name(pod.Name).
+			Namespace(pod.Namespace).
+			SubResource("attach")
+		req.VersionedParams(&api.PodAttachOptions{
+			Container: containerToAttach.Name,
+			Stdin:     p.In != nil,
+			Stdout:    p.Out != nil,
+			Stderr:    p.Err != nil,
+			TTY:       tty,
+		}, api.ParameterCodec)
 
-	err = p.Attach.Attach("POST", req.URL(), p.Config, stdin, p.Out, p.Err, tty)
-	if err != nil {
+		return p.Attach.Attach("POST", req.URL(), p.Config, p.In, p.Out, p.Err, tty)
+	}
+
+	if err := t.Safe(fn); err != nil {
 		return err
 	}
+
 	if p.Stdin && tty && pod.Spec.RestartPolicy == api.RestartPolicyAlways {
-		fmt.Fprintf(p.Out, "Session ended, resume using 'kubectl attach %s -c %s -i -t' command when the pod is running\n", pod.Name, containerToAttach.Name)
+		fmt.Fprintf(p.Out, "Session ended, resume using '%s %s -c %s -i -t' command when the pod is running\n", p.CommandName, pod.Name, containerToAttach.Name)
 	}
 	return nil
 }
 
-// GetContainer returns the container to attach to, with a fallback.
-func (p *AttachOptions) GetContainer(pod *api.Pod) api.Container {
+// containerToAttach returns a reference to the container to attach to, given
+// by name or the first container if name is empty.
+func (p *AttachOptions) containerToAttachTo(pod *api.Pod) (*api.Container, error) {
 	if len(p.ContainerName) > 0 {
-		for _, container := range pod.Spec.Containers {
-			if container.Name == p.ContainerName {
-				return container
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == p.ContainerName {
+				return &pod.Spec.Containers[i], nil
 			}
 		}
+		for i := range pod.Spec.InitContainers {
+			if pod.Spec.InitContainers[i].Name == p.ContainerName {
+				return &pod.Spec.InitContainers[i], nil
+			}
+		}
+		return nil, fmt.Errorf("container not found (%s)", p.ContainerName)
 	}
 
 	glog.V(4).Infof("defaulting container name to %s", pod.Spec.Containers[0].Name)
-	return pod.Spec.Containers[0]
+	return &pod.Spec.Containers[0], nil
 }
 
 // GetContainerName returns the name of the container to attach to, with a fallback.
-func (p *AttachOptions) GetContainerName(pod *api.Pod) string {
-	return p.GetContainer(pod).Name
+func (p *AttachOptions) GetContainerName(pod *api.Pod) (string, error) {
+	c, err := p.containerToAttachTo(pod)
+	if err != nil {
+		return "", err
+	}
+	return c.Name, nil
 }

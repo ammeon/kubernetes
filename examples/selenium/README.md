@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/examples/selenium/README.md).
+[here](http://releases.k8s.io/release-1.3/examples/selenium/README.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -222,7 +222,7 @@ To remove all created resources, run the following:
 kubectl delete rc selenium-hub
 kubectl delete rc selenium-node-chrome
 kubectl delete rc selenium-node-firefox
-kubectl delete rc selenium-python
+kubectl delete deployment selenium-python
 kubectl delete svc selenium-hub
 kubectl delete svc selenium-hub-external
 ```

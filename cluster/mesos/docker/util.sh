@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -332,16 +332,6 @@ function test-teardown {
 # SSH to a node by name or IP ($1) and run a command ($2).
 function ssh-to-node {
   echo "TODO: ssh-to-node" 1>&2
-}
-
-# Restart the kube-proxy on a node ($1)
-function restart-kube-proxy {
-  echo "TODO: restart-kube-proxy" 1>&2
-}
-
-# Restart the apiserver
-function restart-apiserver {
-  echo "TODO: restart-apiserver" 1>&2
 }
 
 # Waits for a kube-system pod (of the provided name) to have the phase/status "Running".

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -106,7 +106,7 @@ kube::log::usage() {
 kube::log::usage_from_stdin() {
   local messages=()
   while read -r line; do
-    messages+=$line
+    messages+=("$line")
   done
 
   kube::log::usage "${messages[@]}"
@@ -129,7 +129,7 @@ kube::log::progress() {
 kube::log::info_from_stdin() {
   local messages=()
   while read -r line; do
-    messages+=$line
+    messages+=("$line")
   done
 
   kube::log::info "${messages[@]}"

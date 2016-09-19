@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,13 +25,14 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/probe"
+	utilnet "k8s.io/kubernetes/pkg/util/net"
 
 	"github.com/golang/glog"
 )
 
 func New() HTTPProber {
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	transport := &http.Transport{TLSClientConfig: tlsConfig, DisableKeepAlives: true}
+	transport := utilnet.SetTransportDefaults(&http.Transport{TLSClientConfig: tlsConfig, DisableKeepAlives: true})
 	return httpProber{transport}
 }
 
@@ -63,6 +64,9 @@ func DoHTTPProbe(url *url.URL, headers http.Header, client HTTPGetInterface) (pr
 		return probe.Failure, err.Error(), nil
 	}
 	req.Header = headers
+	if headers.Get("Host") != "" {
+		req.Host = headers.Get("Host")
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		// Convert errors into failures to catch timeouts.

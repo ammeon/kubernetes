@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ set -o pipefail
 # echo "-=-=-=-=-=-=-=-=-=-="
 
 
-KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
+KUBE_ROOT=${KUBE_ROOT:-$(dirname "${BASH_SOURCE}")/..}
 source "${KUBE_ROOT}/cluster/kube-util.sh"
 
 # Get the absolute path of the directory component of a file, i.e. the
@@ -116,7 +116,7 @@ kubectl="${KUBECTL_PATH:-${kubectl}}"
 
 if [[ "$KUBERNETES_PROVIDER" == "gke" ]]; then
   detect-project &> /dev/null
-elif [[ "$KUBERNETES_PROVIDER" == "ubuntu" || "$KUBERNETES_PROVIDER" == "juju" ]]; then
+elif [[ "$KUBERNETES_PROVIDER" == "ubuntu" ]]; then
   detect-master > /dev/null
   config=(
     "--server=http://${KUBE_MASTER_IP}:8080"

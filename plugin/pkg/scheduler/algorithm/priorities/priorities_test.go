@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -140,7 +140,6 @@ func TestZeroRequest(t *testing.T) {
 		list, err := scheduler.PrioritizeNodes(
 			test.pod,
 			nodeNameToInfo,
-			algorithm.FakePodLister(test.pods),
 			// This should match the configuration in defaultPriorities() in
 			// plugin/pkg/scheduler/algorithmprovider/defaults/defaults.go if you want
 			// to test what's actually in production.

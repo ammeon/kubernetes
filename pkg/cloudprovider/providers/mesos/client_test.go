@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,6 +29,8 @@ import (
 	"github.com/mesos/mesos-go/detector"
 	"github.com/mesos/mesos-go/mesosutil"
 	"golang.org/x/net/context"
+
+	utilnet "k8s.io/kubernetes/pkg/util/net"
 )
 
 // Test data
@@ -180,11 +182,11 @@ func makeHttpMocks() (*httptest.Server, *http.Client, *http.Transport) {
 	}))
 
 	// Intercept all client requests and feed them to the test server
-	transport := &http.Transport{
+	transport := utilnet.SetTransportDefaults(&http.Transport{
 		Proxy: func(req *http.Request) (*url.URL, error) {
 			return url.Parse(httpServer.URL)
 		},
-	}
+	})
 
 	httpClient := &http.Client{Transport: transport}
 
@@ -212,10 +214,8 @@ func Test_parseMesosState(t *testing.T) {
 func Test_listSlaves(t *testing.T) {
 	defer log.Flush()
 	md := FakeMasterDetector{}
-	// TODO: Uncomment next two lines and remove third line when fix #19254
-	// defer httpServer.Close()
-	// httpServer, httpClient, httpTransport := makeHttpMocks()
-	_, httpClient, httpTransport := makeHttpMocks()
+	httpServer, httpClient, httpTransport := makeHttpMocks()
+	defer httpServer.Close()
 
 	cacheTTL := 500 * time.Millisecond
 	mesosClient, err := createMesosClient(md, httpClient, httpTransport, cacheTTL)
@@ -253,10 +253,8 @@ func Test_listSlaves(t *testing.T) {
 func Test_clusterName(t *testing.T) {
 	defer log.Flush()
 	md := FakeMasterDetector{}
-	// TODO: Uncomment next two lines and remove third line when fix #19254
-	// defer httpServer.Close()
-	// httpServer, httpClient, httpTransport := makeHttpMocks()
-	_, httpClient, httpTransport := makeHttpMocks()
+	httpServer, httpClient, httpTransport := makeHttpMocks()
+	defer httpServer.Close()
 	cacheTTL := 500 * time.Millisecond
 	mesosClient, err := createMesosClient(md, httpClient, httpTransport, cacheTTL)
 

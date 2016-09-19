@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,4 +24,5 @@ import (
 	_ "k8s.io/kubernetes/pkg/cloudprovider/providers/openstack"
 	_ "k8s.io/kubernetes/pkg/cloudprovider/providers/ovirt"
 	_ "k8s.io/kubernetes/pkg/cloudprovider/providers/rackspace"
+	_ "k8s.io/kubernetes/pkg/cloudprovider/providers/vsphere"
 )

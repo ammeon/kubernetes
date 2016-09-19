@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/diff"
 )
 
 func testEvent(name string) *api.Event {
@@ -65,7 +65,7 @@ func TestGetAttrs(t *testing.T) {
 		t.Fatalf("Unexpected error %v", err)
 	}
 	if e, a := label, (labels.Set{}); !reflect.DeepEqual(e, a) {
-		t.Errorf("diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("diff: %s", diff.ObjectDiff(e, a))
 	}
 	expect := fields.Set{
 		"metadata.name":                  "f0118",
@@ -82,7 +82,7 @@ func TestGetAttrs(t *testing.T) {
 		"type":                           api.EventTypeNormal,
 	}
 	if e, a := expect, field; !reflect.DeepEqual(e, a) {
-		t.Errorf("diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("diff: %s", diff.ObjectDiff(e, a))
 	}
 }
 

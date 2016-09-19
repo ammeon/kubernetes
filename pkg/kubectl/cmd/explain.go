@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package cmd
 import (
 	"io"
 
+	"github.com/renstrom/dedent"
 	"github.com/spf13/cobra"
 
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -27,27 +28,25 @@ import (
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 )
 
-const (
-	explainExamples = `# Get the documentation of the resource and its fields
-kubectl explain pods
+var (
+	explainExamples = dedent.Dedent(`
+		# Get the documentation of the resource and its fields
+		kubectl explain pods
 
-# Get the documentation of a specific field of a resource
-kubectl explain pods.spec.containers`
+		# Get the documentation of a specific field of a resource
+		kubectl explain pods.spec.containers`)
 
-	explainLong = `Documentation of resources.
+	explainLong = dedent.Dedent(`
+		Documentation of resources.
 
-Possible resource types include: pods (po), services (svc),
-replicationcontrollers (rc), nodes (no), events (ev), componentstatuses (cs),
-limitranges (limits), persistentvolumes (pv), persistentvolumeclaims (pvc),
-resourcequotas (quota), namespaces (ns), horizontalpodautoscalers (hpa)
-or endpoints (ep).`
+		`) + kubectl.PossibleResourceTypes
 )
 
 // NewCmdExplain returns a cobra command for swagger docs
 func NewCmdExplain(f *cmdutil.Factory, out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "explain RESOURCE",
-		Short:   "Documentation of resources.",
+		Short:   "Documentation of resources",
 		Long:    explainLong,
 		Example: explainExamples,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -56,6 +55,7 @@ func NewCmdExplain(f *cmdutil.Factory, out io.Writer) *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("recursive", false, "Print the fields of fields (Currently only 1 level deep)")
+	cmdutil.AddInclude3rdPartyFlags(cmd)
 	return cmd
 }
 
@@ -69,7 +69,7 @@ func RunExplain(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []st
 	apiVersionString := cmdutil.GetFlagString(cmd, "api-version")
 	apiVersion := unversioned.GroupVersion{}
 
-	mapper, _ := f.Object()
+	mapper, _ := f.Object(cmdutil.GetIncludeThirdPartyAPIs(cmd))
 	// TODO: After we figured out the new syntax to separate group and resource, allow
 	// the users to use it in explain (kubectl explain <group><syntax><resource>).
 	// Refer to issue #16039 for why we do this. Refer to PR #15808 that used "/" syntax.

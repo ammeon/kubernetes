@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,7 +47,10 @@ function gcloud-compute-list() {
   local attempt=1
   local result=""
   while true; do
-    if result=$(gcloud compute ${resource} list --project=${PROJECT} ${@:2} | grep "${GREP_REGEX}"); then
+    if result=$(gcloud compute ${resource} list --project=${PROJECT} ${@:2}); then
+      if [[ ! -z "${GREP_REGEX}" ]]; then
+        result=$(echo "${result}" | grep "${GREP_REGEX}")
+      fi
       echo "${result}"
       return
     fi

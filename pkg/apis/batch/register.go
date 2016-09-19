@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ package batch
 import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -47,8 +46,11 @@ func AddToScheme(scheme *runtime.Scheme) {
 // Adds the list of known types to api.Scheme.
 func addKnownTypes(scheme *runtime.Scheme) {
 	scheme.AddKnownTypes(SchemeGroupVersion,
-		&extensions.Job{},
-		&extensions.JobList{},
+		&Job{},
+		&JobList{},
+		&JobTemplate{},
+		&ScheduledJob{},
+		&ScheduledJobList{},
 		&api.ListOptions{},
 	)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -177,7 +177,7 @@ func main() {
 						Containers: []api.Container{
 							{
 								Name:  "serve-hostname",
-								Image: "gcr.io/google_containers/serve_hostname:1.1",
+								Image: "gcr.io/google_containers/serve_hostname:v1.4",
 								Ports: []api.ContainerPort{{ContainerPort: 9376}},
 							},
 						},

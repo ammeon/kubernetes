@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,8 +23,6 @@ import (
 
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/labels"
-
-	"speter.net/go/exp/math/dec/inf"
 )
 
 func TestConversionError(t *testing.T) {
@@ -56,8 +54,8 @@ func TestSemantic(t *testing.T) {
 		{resource.Quantity{}, resource.MustParse("0"), true},
 		{resource.Quantity{}, resource.MustParse("1m"), false},
 		{
-			resource.Quantity{Amount: inf.NewDec(5, 0), Format: resource.BinarySI},
-			resource.Quantity{Amount: inf.NewDec(5, 0), Format: resource.DecimalSI},
+			resource.NewQuantity(5, resource.BinarySI),
+			resource.NewQuantity(5, resource.DecimalSI),
 			true,
 		},
 		{resource.MustParse("2m"), resource.MustParse("1m"), false},
@@ -214,17 +212,17 @@ func TestNodeSelectorRequirementsAsSelector(t *testing.T) {
 			in: []NodeSelectorRequirement{{
 				Key:      "foo",
 				Operator: NodeSelectorOpGt,
-				Values:   []string{"1.1"},
+				Values:   []string{"1"},
 			}},
-			out: mustParse("foo>1.1"),
+			out: mustParse("foo>1"),
 		},
 		{
 			in: []NodeSelectorRequirement{{
 				Key:      "bar",
 				Operator: NodeSelectorOpLt,
-				Values:   []string{"7.1"},
+				Values:   []string{"7"},
 			}},
-			out: mustParse("bar<7.1"),
+			out: mustParse("bar<7"),
 		},
 	}
 

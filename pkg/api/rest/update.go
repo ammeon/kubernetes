@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/validation/field"
@@ -102,4 +103,114 @@ func BeforeUpdate(strategy RESTUpdateStrategy, ctx api.Context, obj, old runtime
 	strategy.Canonicalize(obj)
 
 	return nil
+}
+
+// TransformFunc is a function to transform and return newObj
+type TransformFunc func(ctx api.Context, newObj runtime.Object, oldObj runtime.Object) (transformedNewObj runtime.Object, err error)
+
+// defaultUpdatedObjectInfo implements UpdatedObjectInfo
+type defaultUpdatedObjectInfo struct {
+	// obj is the updated object
+	obj runtime.Object
+
+	// copier makes a copy of the object before returning it.
+	// this allows repeated calls to UpdatedObject() to return
+	// pristine data, even if the returned value is mutated.
+	copier runtime.ObjectCopier
+
+	// transformers is an optional list of transforming functions that modify or
+	// replace obj using information from the context, old object, or other sources.
+	transformers []TransformFunc
+}
+
+// DefaultUpdatedObjectInfo returns an UpdatedObjectInfo impl based on the specified object.
+func DefaultUpdatedObjectInfo(obj runtime.Object, copier runtime.ObjectCopier, transformers ...TransformFunc) UpdatedObjectInfo {
+	return &defaultUpdatedObjectInfo{obj, copier, transformers}
+}
+
+// Preconditions satisfies the UpdatedObjectInfo interface.
+func (i *defaultUpdatedObjectInfo) Preconditions() *api.Preconditions {
+	// Attempt to get the UID out of the object
+	accessor, err := meta.Accessor(i.obj)
+	if err != nil {
+		// If no UID can be read, no preconditions are possible
+		return nil
+	}
+
+	// If empty, no preconditions needed
+	uid := accessor.GetUID()
+	if len(uid) == 0 {
+		return nil
+	}
+
+	return &api.Preconditions{UID: &uid}
+}
+
+// UpdatedObject satisfies the UpdatedObjectInfo interface.
+// It returns a copy of the held obj, passed through any configured transformers.
+func (i *defaultUpdatedObjectInfo) UpdatedObject(ctx api.Context, oldObj runtime.Object) (runtime.Object, error) {
+	var err error
+	// Start with the configured object
+	newObj := i.obj
+
+	// If the original is non-nil (might be nil if the first transformer builds the object from the oldObj), make a copy,
+	// so we don't return the original. BeforeUpdate can mutate the returned object, doing things like clearing ResourceVersion.
+	// If we're re-called, we need to be able to return the pristine version.
+	if newObj != nil {
+		newObj, err = i.copier.Copy(newObj)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Allow any configured transformers to update the new object
+	for _, transformer := range i.transformers {
+		newObj, err = transformer(ctx, newObj, oldObj)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return newObj, nil
+}
+
+// wrappedUpdatedObjectInfo allows wrapping an existing objInfo and
+// chaining additional transformations/checks on the result of UpdatedObject()
+type wrappedUpdatedObjectInfo struct {
+	// obj is the updated object
+	objInfo UpdatedObjectInfo
+
+	// transformers is an optional list of transforming functions that modify or
+	// replace obj using information from the context, old object, or other sources.
+	transformers []TransformFunc
+}
+
+// WrapUpdatedObjectInfo returns an UpdatedObjectInfo impl that delegates to
+// the specified objInfo, then calls the passed transformers
+func WrapUpdatedObjectInfo(objInfo UpdatedObjectInfo, transformers ...TransformFunc) UpdatedObjectInfo {
+	return &wrappedUpdatedObjectInfo{objInfo, transformers}
+}
+
+// Preconditions satisfies the UpdatedObjectInfo interface.
+func (i *wrappedUpdatedObjectInfo) Preconditions() *api.Preconditions {
+	return i.objInfo.Preconditions()
+}
+
+// UpdatedObject satisfies the UpdatedObjectInfo interface.
+// It delegates to the wrapped objInfo and passes the result through any configured transformers.
+func (i *wrappedUpdatedObjectInfo) UpdatedObject(ctx api.Context, oldObj runtime.Object) (runtime.Object, error) {
+	newObj, err := i.objInfo.UpdatedObject(ctx, oldObj)
+	if err != nil {
+		return newObj, err
+	}
+
+	// Allow any configured transformers to update the new object or error
+	for _, transformer := range i.transformers {
+		newObj, err = transformer(ctx, newObj, oldObj)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return newObj, nil
 }

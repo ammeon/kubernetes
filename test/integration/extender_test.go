@@ -1,7 +1,7 @@
 // +build integration,!no-etcd
 
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,12 +36,12 @@ import (
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/plugin/pkg/scheduler"
 	_ "k8s.io/kubernetes/plugin/pkg/scheduler/algorithmprovider"
 	schedulerapi "k8s.io/kubernetes/plugin/pkg/scheduler/api"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/factory"
+	e2e "k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
@@ -185,20 +185,11 @@ func machine_3_Prioritizer(pod *api.Pod, nodes *api.NodeList) (*schedulerapi.Hos
 }
 
 func TestSchedulerExtender(t *testing.T) {
-	framework.DeleteAllEtcdKeys()
+	_, s := framework.RunAMaster(nil)
+	defer s.Close()
 
-	var m *master.Master
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		m.Handler.ServeHTTP(w, req)
-	}))
-	// TODO: Uncomment when fix #19254
-	// defer s.Close()
-
-	masterConfig := framework.NewIntegrationTestMasterConfig()
-	m, err := master.New(masterConfig)
-	if err != nil {
-		t.Fatalf("error in bringing up the master: %v", err)
-	}
+	ns := framework.CreateTestingNamespace("scheduler-extender", s, t)
+	defer framework.DeleteTestingNamespace(ns, s, t)
 
 	restClient := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
@@ -210,8 +201,7 @@ func TestSchedulerExtender(t *testing.T) {
 	es1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		extender1.serveHTTP(t, w, req)
 	}))
-	// TODO: Uncomment when fix #19254
-	// defer es1.Close()
+	defer es1.Close()
 
 	extender2 := &Extender{
 		name:         "extender2",
@@ -221,8 +211,7 @@ func TestSchedulerExtender(t *testing.T) {
 	es2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		extender2.serveHTTP(t, w, req)
 	}))
-	// TODO: Uncomment when fix #19254
-	// defer es2.Close()
+	defer es2.Close()
 
 	policy := schedulerapi.Policy{
 		ExtenderConfigs: []schedulerapi.ExtenderConfig{
@@ -244,22 +233,26 @@ func TestSchedulerExtender(t *testing.T) {
 	}
 	policy.APIVersion = testapi.Default.GroupVersion().String()
 
-	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName)
+	schedulerConfigFactory := factory.NewConfigFactory(restClient, api.DefaultSchedulerName, api.DefaultHardPodAffinitySymmetricWeight, api.DefaultFailureDomains)
 	schedulerConfig, err := schedulerConfigFactory.CreateFromConfig(policy)
 	if err != nil {
 		t.Fatalf("Couldn't create scheduler config: %v", err)
 	}
 	eventBroadcaster := record.NewBroadcaster()
 	schedulerConfig.Recorder = eventBroadcaster.NewRecorder(api.EventSource{Component: api.DefaultSchedulerName})
-	eventBroadcaster.StartRecordingToSink(restClient.Events(""))
+	eventBroadcaster.StartRecordingToSink(restClient.Events(ns.Name))
 	scheduler.New(schedulerConfig).Run()
 
 	defer close(schedulerConfig.StopEverything)
 
-	DoTestPodScheduling(t, restClient)
+	DoTestPodScheduling(ns, t, restClient)
 }
 
-func DoTestPodScheduling(t *testing.T, restClient *client.Client) {
+func DoTestPodScheduling(ns *api.Namespace, t *testing.T, restClient *client.Client) {
+	// NOTE: This test cannot run in parallel, because it is creating and deleting
+	// non-namespaced objects (Nodes).
+	defer restClient.Nodes().DeleteCollection(nil, api.ListOptions{})
+
 	goodCondition := api.NodeCondition{
 		Type:              api.NodeReady,
 		Status:            api.ConditionTrue,
@@ -286,11 +279,11 @@ func DoTestPodScheduling(t *testing.T, restClient *client.Client) {
 	pod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: "extender-test-pod"},
 		Spec: api.PodSpec{
-			Containers: []api.Container{{Name: "container", Image: "kubernetes/pause:go"}},
+			Containers: []api.Container{{Name: "container", Image: e2e.GetPauseImageName(restClient)}},
 		},
 	}
 
-	myPod, err := restClient.Pods(api.NamespaceDefault).Create(pod)
+	myPod, err := restClient.Pods(ns.Name).Create(pod)
 	if err != nil {
 		t.Fatalf("Failed to create pod: %v", err)
 	}
@@ -300,7 +293,7 @@ func DoTestPodScheduling(t *testing.T, restClient *client.Client) {
 		t.Fatalf("Failed to schedule pod: %v", err)
 	}
 
-	if myPod, err := restClient.Pods(api.NamespaceDefault).Get(myPod.Name); err != nil {
+	if myPod, err := restClient.Pods(ns.Name).Get(myPod.Name); err != nil {
 		t.Fatalf("Failed to get pod: %v", err)
 	} else if myPod.Spec.NodeName != "machine3" {
 		t.Fatalf("Failed to schedule using extender, expected machine3, got %v", myPod.Spec.NodeName)

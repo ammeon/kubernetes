@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -104,6 +104,11 @@ func (g *metadataProvider) Enabled() bool {
 	return err == nil
 }
 
+// LazyProvide implements DockerConfigProvider. Should never be called.
+func (g *dockerConfigKeyProvider) LazyProvide() *credentialprovider.DockerConfigEntry {
+	return nil
+}
+
 // Provide implements DockerConfigProvider
 func (g *dockerConfigKeyProvider) Provide() credentialprovider.DockerConfig {
 	// Read the contents of the google-dockercfg metadata key and
@@ -115,6 +120,11 @@ func (g *dockerConfigKeyProvider) Provide() credentialprovider.DockerConfig {
 	}
 
 	return credentialprovider.DockerConfig{}
+}
+
+// LazyProvide implements DockerConfigProvider. Should never be called.
+func (g *dockerConfigUrlKeyProvider) LazyProvide() *credentialprovider.DockerConfigEntry {
+	return nil
 }
 
 // Provide implements DockerConfigProvider
@@ -164,6 +174,11 @@ func (g *containerRegistryProvider) Enabled() bool {
 // that is returned by GCE metadata.
 type tokenBlob struct {
 	AccessToken string `json:"access_token"`
+}
+
+// LazyProvide implements DockerConfigProvider. Should never be called.
+func (g *containerRegistryProvider) LazyProvide() *credentialprovider.DockerConfigEntry {
+	return nil
 }
 
 // Provide implements DockerConfigProvider

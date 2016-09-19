@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ func (persistentvolumeStrategy) AllowCreateOnUpdate() bool {
 // PrepareForUpdate sets the Status fields which is not allowed to be set by an end user updating a PV
 func (persistentvolumeStrategy) PrepareForUpdate(obj, old runtime.Object) {
 	newPv := obj.(*api.PersistentVolume)
-	oldPv := obj.(*api.PersistentVolume)
+	oldPv := old.(*api.PersistentVolume)
 	newPv.Status = oldPv.Status
 }
 
@@ -86,7 +86,7 @@ var StatusStrategy = persistentvolumeStatusStrategy{Strategy}
 // PrepareForUpdate sets the Spec field which is not allowed to be changed when updating a PV's Status
 func (persistentvolumeStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
 	newPv := obj.(*api.PersistentVolume)
-	oldPv := obj.(*api.PersistentVolume)
+	oldPv := old.(*api.PersistentVolume)
 	newPv.Spec = oldPv.Spec
 }
 

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -41,6 +41,14 @@ import (
 const (
 	// The revision annotation of a deployment's replica sets which records its rollout sequence
 	RevisionAnnotation = "deployment.kubernetes.io/revision"
+	// DesiredReplicasAnnotation is the desired replicas for a deployment recorded as an annotation
+	// in its replica sets. Helps in separating scaling events from the rollout process and for
+	// determining if the new replica set for a deployment is really saturated.
+	DesiredReplicasAnnotation = "deployment.kubernetes.io/desired-replicas"
+	// MaxReplicasAnnotation is the maximum replicas a deployment can have at a given point, which
+	// is deployment.spec.replicas + maxSurge. Used by the underlying replica sets to estimate their
+	// proportions in case the deployment has surge replicas.
+	MaxReplicasAnnotation = "deployment.kubernetes.io/max-replicas"
 
 	// Here are the possible rollback event reasons
 	RollbackRevisionNotFound  = "DeploymentRollbackRevisionNotFound"
@@ -48,16 +56,67 @@ const (
 	RollbackDone              = "DeploymentRollback"
 )
 
+// GetAllReplicaSets returns the old and new replica sets targeted by the given Deployment. It gets PodList and ReplicaSetList from client interface.
+// Note that the first set of old replica sets doesn't include the ones with no pods, and the second set of old replica sets include all old replica sets.
+// The third returned value is the new replica set, and it may be nil if it doesn't exist yet.
+func GetAllReplicaSets(deployment *extensions.Deployment, c clientset.Interface) ([]*extensions.ReplicaSet, []*extensions.ReplicaSet, *extensions.ReplicaSet, error) {
+	rsList, err := listReplicaSets(deployment, c)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	podList, err := listPods(deployment, c)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	oldRSes, allOldRSes, err := FindOldReplicaSets(deployment, rsList, podList)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	newRS, err := FindNewReplicaSet(deployment, rsList)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return oldRSes, allOldRSes, newRS, nil
+}
+
 // GetOldReplicaSets returns the old replica sets targeted by the given Deployment; get PodList and ReplicaSetList from client interface.
 // Note that the first set of old replica sets doesn't include the ones with no pods, and the second set of old replica sets include all old replica sets.
 func GetOldReplicaSets(deployment *extensions.Deployment, c clientset.Interface) ([]*extensions.ReplicaSet, []*extensions.ReplicaSet, error) {
-	return GetOldReplicaSetsFromLists(deployment, c,
-		func(namespace string, options api.ListOptions) (*api.PodList, error) {
-			return c.Core().Pods(namespace).List(options)
-		},
+	rsList, err := listReplicaSets(deployment, c)
+	if err != nil {
+		return nil, nil, err
+	}
+	podList, err := listPods(deployment, c)
+	if err != nil {
+		return nil, nil, err
+	}
+	return FindOldReplicaSets(deployment, rsList, podList)
+}
+
+// GetNewReplicaSet returns a replica set that matches the intent of the given deployment; get ReplicaSetList from client interface.
+// Returns nil if the new replica set doesn't exist yet.
+func GetNewReplicaSet(deployment *extensions.Deployment, c clientset.Interface) (*extensions.ReplicaSet, error) {
+	rsList, err := listReplicaSets(deployment, c)
+	if err != nil {
+		return nil, err
+	}
+	return FindNewReplicaSet(deployment, rsList)
+}
+
+// listReplicaSets lists all RSes the given deployment targets with the given client interface.
+func listReplicaSets(deployment *extensions.Deployment, c clientset.Interface) ([]extensions.ReplicaSet, error) {
+	return ListReplicaSets(deployment,
 		func(namespace string, options api.ListOptions) ([]extensions.ReplicaSet, error) {
 			rsList, err := c.Extensions().ReplicaSets(namespace).List(options)
 			return rsList.Items, err
+		})
+}
+
+// listReplicaSets lists all Pods the given deployment targets with the given client interface.
+func listPods(deployment *extensions.Deployment, c clientset.Interface) (*api.PodList, error) {
+	return ListPods(deployment,
+		func(namespace string, options api.ListOptions) (*api.PodList, error) {
+			return c.Core().Pods(namespace).List(options)
 		})
 }
 
@@ -65,18 +124,74 @@ func GetOldReplicaSets(deployment *extensions.Deployment, c clientset.Interface)
 type rsListFunc func(string, api.ListOptions) ([]extensions.ReplicaSet, error)
 type podListFunc func(string, api.ListOptions) (*api.PodList, error)
 
-// GetOldReplicaSetsFromLists returns two sets of old replica sets targeted by the given Deployment; get PodList and ReplicaSetList with input functions.
+// ListReplicaSets returns a slice of RSes the given deployment targets.
+func ListReplicaSets(deployment *extensions.Deployment, getRSList rsListFunc) ([]extensions.ReplicaSet, error) {
+	// TODO: Right now we list replica sets by their labels. We should list them by selector, i.e. the replica set's selector
+	//       should be a superset of the deployment's selector, see https://github.com/kubernetes/kubernetes/issues/19830;
+	//       or use controllerRef, see https://github.com/kubernetes/kubernetes/issues/2210
+	namespace := deployment.Namespace
+	selector, err := unversioned.LabelSelectorAsSelector(deployment.Spec.Selector)
+	if err != nil {
+		return nil, err
+	}
+	options := api.ListOptions{LabelSelector: selector}
+	return getRSList(namespace, options)
+}
+
+// ListPods returns a list of pods the given deployment targets.
+func ListPods(deployment *extensions.Deployment, getPodList podListFunc) (*api.PodList, error) {
+	namespace := deployment.Namespace
+	selector, err := unversioned.LabelSelectorAsSelector(deployment.Spec.Selector)
+	if err != nil {
+		return nil, err
+	}
+	options := api.ListOptions{LabelSelector: selector}
+	return getPodList(namespace, options)
+}
+
+// equalIgnoreHash returns true if two given podTemplateSpec are equal, ignoring the diff in value of Labels[pod-template-hash]
+// We ignore pod-template-hash because the hash result would be different upon podTemplateSpec API changes
+// (e.g. the addition of a new field will cause the hash code to change)
+// Note that we assume input podTemplateSpecs contain non-empty labels
+func equalIgnoreHash(template1, template2 api.PodTemplateSpec) (bool, error) {
+	// The podTemplateSpec must have a non-empty label so that label selectors can find them.
+	// This is checked by validation (of resources contain a podTemplateSpec).
+	if len(template1.Labels) == 0 || len(template2.Labels) == 0 {
+		return false, fmt.Errorf("Unexpected empty labels found in given template")
+	}
+	hash1 := template1.Labels[extensions.DefaultDeploymentUniqueLabelKey]
+	hash2 := template2.Labels[extensions.DefaultDeploymentUniqueLabelKey]
+	// compare equality ignoring pod-template-hash
+	template1.Labels[extensions.DefaultDeploymentUniqueLabelKey] = hash2
+	result := api.Semantic.DeepEqual(template1, template2)
+	template1.Labels[extensions.DefaultDeploymentUniqueLabelKey] = hash1
+	return result, nil
+}
+
+// FindNewReplicaSet returns the new RS this given deployment targets (the one with the same pod template).
+func FindNewReplicaSet(deployment *extensions.Deployment, rsList []extensions.ReplicaSet) (*extensions.ReplicaSet, error) {
+	newRSTemplate := GetNewReplicaSetTemplate(deployment)
+	for i := range rsList {
+		equal, err := equalIgnoreHash(rsList[i].Spec.Template, newRSTemplate)
+		if err != nil {
+			return nil, err
+		}
+		if equal {
+			// This is the new ReplicaSet.
+			return &rsList[i], nil
+		}
+	}
+	// new ReplicaSet does not exist.
+	return nil, nil
+}
+
+// FindOldReplicaSets returns the old replica sets targeted by the given Deployment, with the given PodList and slice of RSes.
 // Note that the first set of old replica sets doesn't include the ones with no pods, and the second set of old replica sets include all old replica sets.
-func GetOldReplicaSetsFromLists(deployment *extensions.Deployment, c clientset.Interface, getPodList podListFunc, getRSList rsListFunc) ([]*extensions.ReplicaSet, []*extensions.ReplicaSet, error) {
+func FindOldReplicaSets(deployment *extensions.Deployment, rsList []extensions.ReplicaSet, podList *api.PodList) ([]*extensions.ReplicaSet, []*extensions.ReplicaSet, error) {
 	// Find all pods whose labels match deployment.Spec.Selector, and corresponding replica sets for pods in podList.
 	// All pods and replica sets are labeled with pod-template-hash to prevent overlapping
-	// TODO: Right now we list all replica sets and then filter. We should add an API for this.
 	oldRSs := map[string]extensions.ReplicaSet{}
 	allOldRSs := map[string]extensions.ReplicaSet{}
-	rsList, podList, err := rsAndPodsWithHashKeySynced(deployment, c, getRSList, getPodList)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error labeling replica sets and pods with pod-template-hash: %v", err)
-	}
 	newRSTemplate := GetNewReplicaSetTemplate(deployment)
 	for _, pod := range podList.Items {
 		podLabelsSelector := labels.Set(pod.ObjectMeta.Labels)
@@ -86,7 +201,11 @@ func GetOldReplicaSetsFromLists(deployment *extensions.Deployment, c clientset.I
 				return nil, nil, fmt.Errorf("invalid label selector: %v", err)
 			}
 			// Filter out replica set that has the same pod template spec as the deployment - that is the new replica set.
-			if api.Semantic.DeepEqual(rs.Spec.Template, newRSTemplate) {
+			equal, err := equalIgnoreHash(rs.Spec.Template, newRSTemplate)
+			if err != nil {
+				return nil, nil, err
+			}
+			if equal {
 				continue
 			}
 			allOldRSs[rs.ObjectMeta.Name] = rs
@@ -108,168 +227,7 @@ func GetOldReplicaSetsFromLists(deployment *extensions.Deployment, c clientset.I
 	return requiredRSs, allRSs, nil
 }
 
-// GetNewReplicaSet returns a replica set that matches the intent of the given deployment; get ReplicaSetList from client interface.
-// Returns nil if the new replica set doesn't exist yet.
-func GetNewReplicaSet(deployment *extensions.Deployment, c clientset.Interface) (*extensions.ReplicaSet, error) {
-	return GetNewReplicaSetFromList(deployment, c,
-		func(namespace string, options api.ListOptions) (*api.PodList, error) {
-			return c.Core().Pods(namespace).List(options)
-		},
-		func(namespace string, options api.ListOptions) ([]extensions.ReplicaSet, error) {
-			rsList, err := c.Extensions().ReplicaSets(namespace).List(options)
-			return rsList.Items, err
-		})
-}
-
-// GetNewReplicaSetFromList returns a replica set that matches the intent of the given deployment; get ReplicaSetList with the input function.
-// Returns nil if the new replica set doesn't exist yet.
-func GetNewReplicaSetFromList(deployment *extensions.Deployment, c clientset.Interface, getPodList podListFunc, getRSList rsListFunc) (*extensions.ReplicaSet, error) {
-	rsList, _, err := rsAndPodsWithHashKeySynced(deployment, c, getRSList, getPodList)
-	if err != nil {
-		return nil, fmt.Errorf("error listing ReplicaSets: %v", err)
-	}
-	newRSTemplate := GetNewReplicaSetTemplate(deployment)
-
-	for i := range rsList {
-		if api.Semantic.DeepEqual(rsList[i].Spec.Template, newRSTemplate) {
-			// This is the new ReplicaSet.
-			return &rsList[i], nil
-		}
-	}
-	// new ReplicaSet does not exist.
-	return nil, nil
-}
-
-// rsAndPodsWithHashKeySynced returns the RSs and pods the given deployment targets, with pod-template-hash information synced.
-func rsAndPodsWithHashKeySynced(deployment *extensions.Deployment, c clientset.Interface, getRSList rsListFunc, getPodList podListFunc) ([]extensions.ReplicaSet, *api.PodList, error) {
-	namespace := deployment.Namespace
-	selector, err := unversioned.LabelSelectorAsSelector(deployment.Spec.Selector)
-	if err != nil {
-		return nil, nil, err
-	}
-	options := api.ListOptions{LabelSelector: selector}
-	rsList, err := getRSList(namespace, options)
-	if err != nil {
-		return nil, nil, err
-	}
-	syncedRSList := []extensions.ReplicaSet{}
-	for _, rs := range rsList {
-		// Add pod-template-hash information if it's not in the RS.
-		// Otherwise, new RS produced by Deployment will overlap with pre-existing ones
-		// that aren't constrained by the pod-template-hash.
-		syncedRS, err := addHashKeyToRSAndPods(deployment, c, rs, getPodList)
-		if err != nil {
-			return nil, nil, err
-		}
-		syncedRSList = append(syncedRSList, *syncedRS)
-	}
-	syncedPodList, err := getPodList(namespace, options)
-	if err != nil {
-		return nil, nil, err
-	}
-	return syncedRSList, syncedPodList, nil
-}
-
-// addHashKeyToRSAndPods adds pod-template-hash information to the given rs, if it's not already there, with the following steps:
-// 1. Add hash label to the rs's pod template, and make sure the controller sees this update so that no orphaned pods will be created
-// 2. Add hash label to all pods this rs owns, wait until replicaset controller reports rs.Status.FullyLabeledReplicas equal to the desired number of replicas
-// 3. Add hash label to the rs's label and selector
-func addHashKeyToRSAndPods(deployment *extensions.Deployment, c clientset.Interface, rs extensions.ReplicaSet, getPodList podListFunc) (updatedRS *extensions.ReplicaSet, err error) {
-	updatedRS = &rs
-	// If the rs already has the new hash label in its selector, it's done syncing
-	if labelsutil.SelectorHasLabel(rs.Spec.Selector, extensions.DefaultDeploymentUniqueLabelKey) {
-		return
-	}
-	namespace := deployment.Namespace
-	meta := rs.Spec.Template.ObjectMeta
-	meta.Labels = labelsutil.CloneAndRemoveLabel(meta.Labels, extensions.DefaultDeploymentUniqueLabelKey)
-	hash := fmt.Sprintf("%d", podutil.GetPodTemplateSpecHash(api.PodTemplateSpec{
-		ObjectMeta: meta,
-		Spec:       rs.Spec.Template.Spec,
-	}))
-	rsUpdated := false
-	// 1. Add hash template label to the rs. This ensures that any newly created pods will have the new label.
-	updatedRS, rsUpdated, err = rsutil.UpdateRSWithRetries(c.Extensions().ReplicaSets(namespace), updatedRS,
-		func(updated *extensions.ReplicaSet) error {
-			// Precondition: the RS doesn't contain the new hash in its pod template label.
-			if updated.Spec.Template.Labels[extensions.DefaultDeploymentUniqueLabelKey] == hash {
-				return errors.ErrPreconditionViolated
-			}
-			updated.Spec.Template.Labels = labelsutil.AddLabel(updated.Spec.Template.Labels, extensions.DefaultDeploymentUniqueLabelKey, hash)
-			return nil
-		})
-	if err != nil {
-		return nil, fmt.Errorf("error updating %s %s/%s pod template label with template hash: %v", updatedRS.Kind, updatedRS.Namespace, updatedRS.Name, err)
-	}
-	if rsUpdated {
-		// Make sure rs pod template is updated so that it won't create pods without the new label (orphaned pods).
-		if updatedRS.Generation > updatedRS.Status.ObservedGeneration {
-			if err = waitForReplicaSetUpdated(c, updatedRS.Generation, namespace, updatedRS.Name); err != nil {
-				return nil, fmt.Errorf("error waiting for %s %s/%s generation %d observed by controller: %v", updatedRS.Kind, updatedRS.Namespace, updatedRS.Name, updatedRS.Generation, err)
-			}
-		}
-		glog.V(4).Infof("Observed the update of %s %s/%s's pod template with hash %s.", rs.Kind, rs.Namespace, rs.Name, hash)
-	} else {
-		// If RS wasn't updated but didn't return error in step 1, we've hit a RS not found error.
-		// Return here and retry in the next sync loop.
-		return &rs, nil
-	}
-	glog.V(4).Infof("Observed the update of rs %s's pod template with hash %s.", rs.Name, hash)
-
-	// 2. Update all pods managed by the rs to have the new hash label, so they will be correctly adopted.
-	selector, err := unversioned.LabelSelectorAsSelector(updatedRS.Spec.Selector)
-	if err != nil {
-		return nil, fmt.Errorf("error in converting selector to label selector for replica set %s: %s", updatedRS.Name, err)
-	}
-	options := api.ListOptions{LabelSelector: selector}
-	podList, err := getPodList(namespace, options)
-	if err != nil {
-		return nil, fmt.Errorf("error in getting pod list for namespace %s and list options %+v: %s", namespace, options, err)
-	}
-	allPodsLabeled := false
-	if allPodsLabeled, err = labelPodsWithHash(podList, updatedRS, c, namespace, hash); err != nil {
-		return nil, fmt.Errorf("error in adding template hash label %s to pods %+v: %s", hash, podList, err)
-	}
-	// If not all pods are labeled but didn't return error in step 2, we've hit at least one pod not found error.
-	// Return here and retry in the next sync loop.
-	if !allPodsLabeled {
-		return updatedRS, nil
-	}
-
-	// We need to wait for the replicaset controller to observe the pods being
-	// labeled with pod template hash. Because previously we've called
-	// waitForReplicaSetUpdated, the replicaset controller should have dropped
-	// FullyLabeledReplicas to 0 already, we only need to wait it to increase
-	// back to the number of replicas in the spec.
-	if err = waitForPodsHashPopulated(c, updatedRS.Generation, namespace, updatedRS.Name); err != nil {
-		return nil, fmt.Errorf("%s %s/%s: error waiting for replicaset controller to observe pods being labeled with template hash: %v", updatedRS.Kind, updatedRS.Namespace, updatedRS.Name, err)
-	}
-
-	// 3. Update rs label and selector to include the new hash label
-	// Copy the old selector, so that we can scrub out any orphaned pods
-	if updatedRS, rsUpdated, err = rsutil.UpdateRSWithRetries(c.Extensions().ReplicaSets(namespace), updatedRS,
-		func(updated *extensions.ReplicaSet) error {
-			// Precondition: the RS doesn't contain the new hash in its label or selector.
-			if updated.Labels[extensions.DefaultDeploymentUniqueLabelKey] == hash && updated.Spec.Selector.MatchLabels[extensions.DefaultDeploymentUniqueLabelKey] == hash {
-				return errors.ErrPreconditionViolated
-			}
-			updated.Labels = labelsutil.AddLabel(updated.Labels, extensions.DefaultDeploymentUniqueLabelKey, hash)
-			updated.Spec.Selector = labelsutil.AddLabelToSelector(updated.Spec.Selector, extensions.DefaultDeploymentUniqueLabelKey, hash)
-			return nil
-		}); err != nil {
-		return nil, fmt.Errorf("error updating %s %s/%s label and selector with template hash: %v", updatedRS.Kind, updatedRS.Namespace, updatedRS.Name, err)
-	}
-	if rsUpdated {
-		glog.V(4).Infof("Updated %s %s/%s's selector and label with hash %s.", rs.Kind, rs.Namespace, rs.Name, hash)
-	}
-	// If the RS isn't actually updated in step 3, that's okay, we'll retry in the next sync loop since its selector isn't updated yet.
-
-	// TODO: look for orphaned pods and label them in the background somewhere else periodically
-
-	return updatedRS, nil
-}
-
-func waitForReplicaSetUpdated(c clientset.Interface, desiredGeneration int64, namespace, name string) error {
+func WaitForReplicaSetUpdated(c clientset.Interface, desiredGeneration int64, namespace, name string) error {
 	return wait.Poll(10*time.Millisecond, 1*time.Minute, func() (bool, error) {
 		rs, err := c.Extensions().ReplicaSets(namespace).Get(name)
 		if err != nil {
@@ -279,7 +237,7 @@ func waitForReplicaSetUpdated(c clientset.Interface, desiredGeneration int64, na
 	})
 }
 
-func waitForPodsHashPopulated(c clientset.Interface, desiredGeneration int64, namespace, name string) error {
+func WaitForPodsHashPopulated(c clientset.Interface, desiredGeneration int64, namespace, name string) error {
 	return wait.Poll(1*time.Second, 1*time.Minute, func() (bool, error) {
 		rs, err := c.Extensions().ReplicaSets(namespace).Get(name)
 		if err != nil {
@@ -290,9 +248,9 @@ func waitForPodsHashPopulated(c clientset.Interface, desiredGeneration int64, na
 	})
 }
 
-// labelPodsWithHash labels all pods in the given podList with the new hash label.
+// LabelPodsWithHash labels all pods in the given podList with the new hash label.
 // The returned bool value can be used to tell if all pods are actually labeled.
-func labelPodsWithHash(podList *api.PodList, rs *extensions.ReplicaSet, c clientset.Interface, namespace, hash string) (bool, error) {
+func LabelPodsWithHash(podList *api.PodList, rs *extensions.ReplicaSet, c clientset.Interface, namespace, hash string) (bool, error) {
 	allPodsLabeled := true
 	for _, pod := range podList.Items {
 		// Only label the pod that doesn't already have the new hash
@@ -344,8 +302,8 @@ func SetFromReplicaSetTemplate(deployment *extensions.Deployment, template api.P
 }
 
 // Returns the sum of Replicas of the given replica sets.
-func GetReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) int {
-	totalReplicaCount := 0
+func GetReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) int32 {
+	totalReplicaCount := int32(0)
 	for _, rs := range replicaSets {
 		if rs != nil {
 			totalReplicaCount += rs.Spec.Replicas
@@ -355,8 +313,8 @@ func GetReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) int {
 }
 
 // GetActualReplicaCountForReplicaSets returns the sum of actual replicas of the given replica sets.
-func GetActualReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) int {
-	totalReplicaCount := 0
+func GetActualReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) int32 {
+	totalReplicaCount := int32(0)
 	for _, rs := range replicaSets {
 		if rs != nil {
 			totalReplicaCount += rs.Status.Replicas
@@ -365,26 +323,46 @@ func GetActualReplicaCountForReplicaSets(replicaSets []*extensions.ReplicaSet) i
 	return totalReplicaCount
 }
 
-// Returns the number of available pods corresponding to the given replica sets.
-func GetAvailablePodsForReplicaSets(c clientset.Interface, rss []*extensions.ReplicaSet, minReadySeconds int) (int, error) {
-	allPods, err := GetPodsForReplicaSets(c, rss)
+// GetAvailablePodsForReplicaSets returns the number of available pods (listed from clientset) corresponding to the given replica sets.
+func GetAvailablePodsForReplicaSets(c clientset.Interface, deployment *extensions.Deployment, rss []*extensions.ReplicaSet, minReadySeconds int32) (int32, error) {
+	podList, err := listPods(deployment, c)
 	if err != nil {
 		return 0, err
 	}
-	return getReadyPodsCount(allPods, minReadySeconds), nil
+	return CountAvailablePodsForReplicaSets(podList, rss, minReadySeconds)
 }
 
-func getReadyPodsCount(pods []api.Pod, minReadySeconds int) int {
-	readyPodCount := 0
+// CountAvailablePodsForReplicaSets returns the number of available pods corresponding to the given pod list and replica sets.
+// Note that the input pod list should be the pods targeted by the deployment of input replica sets.
+func CountAvailablePodsForReplicaSets(podList *api.PodList, rss []*extensions.ReplicaSet, minReadySeconds int32) (int32, error) {
+	rsPods, err := filterPodsMatchingReplicaSets(rss, podList)
+	if err != nil {
+		return 0, err
+	}
+	return countAvailablePods(rsPods, minReadySeconds), nil
+}
+
+// GetAvailablePodsForDeployment returns the number of available pods (listed from clientset) corresponding to the given deployment.
+func GetAvailablePodsForDeployment(c clientset.Interface, deployment *extensions.Deployment, minReadySeconds int32) (int32, error) {
+	podList, err := listPods(deployment, c)
+	if err != nil {
+		return 0, err
+	}
+	return countAvailablePods(podList.Items, minReadySeconds), nil
+}
+
+func countAvailablePods(pods []api.Pod, minReadySeconds int32) int32 {
+	availablePodCount := int32(0)
 	for _, pod := range pods {
-		if IsPodAvailable(&pod, minReadySeconds) {
-			readyPodCount++
+		// TODO: Make the time.Now() as argument to allow unit test this.
+		if IsPodAvailable(&pod, minReadySeconds, time.Now()) {
+			availablePodCount++
 		}
 	}
-	return readyPodCount
+	return availablePodCount
 }
 
-func IsPodAvailable(pod *api.Pod, minReadySeconds int) bool {
+func IsPodAvailable(pod *api.Pod, minReadySeconds int32, now time.Time) bool {
 	if !controller.IsPodActive(*pod) {
 		return false
 	}
@@ -393,11 +371,11 @@ func IsPodAvailable(pod *api.Pod, minReadySeconds int) bool {
 	for _, c := range pod.Status.Conditions {
 		// we only care about pod ready conditions
 		if c.Type == api.PodReady && c.Status == api.ConditionTrue {
-			// 2 cases that this ready condition is valid (passed minReadySeconds, i.e. the pod is ready):
-			// 1. minReadySeconds <= 0
+			// 2 cases that this ready condition is valid (passed minReadySeconds, i.e. the pod is available):
+			// 1. minReadySeconds == 0, or
 			// 2. LastTransitionTime (is set) + minReadySeconds (>0) < current time
 			minReadySecondsDuration := time.Duration(minReadySeconds) * time.Second
-			if minReadySeconds <= 0 || !c.LastTransitionTime.IsZero() && c.LastTransitionTime.Add(minReadySecondsDuration).Before(time.Now()) {
+			if minReadySeconds == 0 || !c.LastTransitionTime.IsZero() && c.LastTransitionTime.Add(minReadySecondsDuration).Before(now) {
 				return true
 			}
 		}
@@ -405,29 +383,20 @@ func IsPodAvailable(pod *api.Pod, minReadySeconds int) bool {
 	return false
 }
 
-func GetPodsForReplicaSets(c clientset.Interface, replicaSets []*extensions.ReplicaSet) ([]api.Pod, error) {
-	allPods := map[string]api.Pod{}
+// filterPodsMatchingReplicaSets filters the given pod list and only return the ones targeted by the input replicasets
+func filterPodsMatchingReplicaSets(replicaSets []*extensions.ReplicaSet, podList *api.PodList) ([]api.Pod, error) {
+	rsPods := []api.Pod{}
 	for _, rs := range replicaSets {
-		if rs != nil {
-			selector, err := unversioned.LabelSelectorAsSelector(rs.Spec.Selector)
-			if err != nil {
-				return nil, fmt.Errorf("invalid label selector: %v", err)
-			}
-			options := api.ListOptions{LabelSelector: selector}
-			podList, err := c.Core().Pods(rs.ObjectMeta.Namespace).List(options)
-			if err != nil {
-				return nil, fmt.Errorf("error listing pods: %v", err)
-			}
-			for _, pod := range podList.Items {
-				allPods[pod.Name] = pod
-			}
+		matchingFunc, err := rsutil.MatchingPodsFunc(rs)
+		if err != nil {
+			return nil, err
 		}
+		if matchingFunc == nil {
+			continue
+		}
+		rsPods = append(rsPods, podutil.Filter(podList, matchingFunc)...)
 	}
-	requiredPods := []api.Pod{}
-	for _, pod := range allPods {
-		requiredPods = append(requiredPods, pod)
-	}
-	return requiredPods, nil
+	return rsPods, nil
 }
 
 // Revision returns the revision number of the input replica set
@@ -447,17 +416,17 @@ func IsRollingUpdate(deployment *extensions.Deployment) bool {
 // When one of the followings is true, we're rolling out the deployment; otherwise, we're scaling it.
 // 1) The new RS is saturated: newRS's replicas == deployment's replicas
 // 2) Max number of pods allowed is reached: deployment's replicas + maxSurge == all RSs' replicas
-func NewRSNewReplicas(deployment *extensions.Deployment, allRSs []*extensions.ReplicaSet, newRS *extensions.ReplicaSet) (int, error) {
+func NewRSNewReplicas(deployment *extensions.Deployment, allRSs []*extensions.ReplicaSet, newRS *extensions.ReplicaSet) (int32, error) {
 	switch deployment.Spec.Strategy.Type {
 	case extensions.RollingUpdateDeploymentStrategyType:
 		// Check if we can scale up.
-		maxSurge, err := intstrutil.GetValueFromIntOrPercent(&deployment.Spec.Strategy.RollingUpdate.MaxSurge, deployment.Spec.Replicas, true)
+		maxSurge, err := intstrutil.GetValueFromIntOrPercent(&deployment.Spec.Strategy.RollingUpdate.MaxSurge, int(deployment.Spec.Replicas), true)
 		if err != nil {
 			return 0, err
 		}
 		// Find the total number of pods
 		currentPodCount := GetReplicaCountForReplicaSets(allRSs)
-		maxTotalPods := deployment.Spec.Replicas + maxSurge
+		maxTotalPods := deployment.Spec.Replicas + int32(maxSurge)
 		if currentPodCount >= maxTotalPods {
 			// Cannot scale up.
 			return newRS.Spec.Replicas, nil
@@ -465,13 +434,28 @@ func NewRSNewReplicas(deployment *extensions.Deployment, allRSs []*extensions.Re
 		// Scale up.
 		scaleUpCount := maxTotalPods - currentPodCount
 		// Do not exceed the number of desired replicas.
-		scaleUpCount = integer.IntMin(scaleUpCount, deployment.Spec.Replicas-newRS.Spec.Replicas)
+		scaleUpCount = int32(integer.IntMin(int(scaleUpCount), int(deployment.Spec.Replicas-newRS.Spec.Replicas)))
 		return newRS.Spec.Replicas + scaleUpCount, nil
 	case extensions.RecreateDeploymentStrategyType:
 		return deployment.Spec.Replicas, nil
 	default:
 		return 0, fmt.Errorf("deployment type %v isn't supported", deployment.Spec.Strategy.Type)
 	}
+}
+
+// IsSaturated checks if the new replica set is saturated by comparing its size with its deployment size.
+// Both the deployment and the replica set have to believe this replica set can own all of the desired
+// replicas in the deployment and the annotation helps in achieving that.
+func IsSaturated(deployment *extensions.Deployment, rs *extensions.ReplicaSet) bool {
+	if rs == nil {
+		return false
+	}
+	desiredString := rs.Annotations[DesiredReplicasAnnotation]
+	desired, err := strconv.Atoi(desiredString)
+	if err != nil {
+		return false
+	}
+	return rs.Spec.Replicas == deployment.Spec.Replicas && int32(desired) == deployment.Spec.Replicas
 }
 
 // Polls for deployment to be updated so that deployment.Status.ObservedGeneration >= desiredGeneration.
@@ -496,12 +480,12 @@ func WaitForObservedDeployment(getDeploymentFunc func() (*extensions.Deployment,
 // 1 desired, max unavailable 25%, surge 1% - should scale new(+1), then old(-1)
 // 2 desired, max unavailable 0%, surge 1% - should scale new(+1), then old(-1), then new(+1), then old(-1)
 // 1 desired, max unavailable 0%, surge 1% - should scale new(+1), then old(-1)
-func ResolveFenceposts(maxSurge, maxUnavailable *intstrutil.IntOrString, desired int) (int, int, error) {
-	surge, err := intstrutil.GetValueFromIntOrPercent(maxSurge, desired, true)
+func ResolveFenceposts(maxSurge, maxUnavailable *intstrutil.IntOrString, desired int32) (int32, int32, error) {
+	surge, err := intstrutil.GetValueFromIntOrPercent(maxSurge, int(desired), true)
 	if err != nil {
 		return 0, 0, err
 	}
-	unavailable, err := intstrutil.GetValueFromIntOrPercent(maxUnavailable, desired, false)
+	unavailable, err := intstrutil.GetValueFromIntOrPercent(maxUnavailable, int(desired), false)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -514,5 +498,5 @@ func ResolveFenceposts(maxSurge, maxUnavailable *intstrutil.IntOrString, desired
 		unavailable = 1
 	}
 
-	return surge, unavailable, nil
+	return int32(surge), int32(unavailable), nil
 }

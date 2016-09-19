@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -67,6 +67,11 @@ var ErrorHandlers = []func(error){logError}
 // is preferable to logging the error - the default behavior is to log but the
 // errors may be sent to a remote server for analysis.
 func HandleError(err error) {
+	// this is sometimes called with a nil error.  We probably shouldn't fail and should do nothing instead
+	if err == nil {
+		return
+	}
+
 	for _, fn := range ErrorHandlers {
 		fn(err)
 	}

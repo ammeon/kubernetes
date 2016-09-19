@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -93,6 +93,9 @@ func NewSnippetWriter(w io.Writer, c *Context, left, right string) *SnippetWrite
 // becomes a requirement. You can do arbitrary logic inside these templates,
 // but you should consider doing the logic in go and stitching them together
 // for the sake of your readers.
+//
+// TODO: Change Do() to optionally take a list of pairt of parameters (key, value)
+// and have it construct a combined map with that and args.
 func (s *SnippetWriter) Do(format string, args interface{}) *SnippetWriter {
 	if s.err != nil {
 		return s

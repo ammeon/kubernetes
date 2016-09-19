@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 	. "k8s.io/kubernetes/pkg/kubelet/container"
 	ctest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/flowcontrol"
 )
 
 func TestSerializedPuller(t *testing.T) {
@@ -99,7 +100,7 @@ func TestSerializedPuller(t *testing.T) {
 			ImagePullPolicy: c.policy,
 		}
 
-		backOff := util.NewBackOff(time.Second, time.Minute)
+		backOff := flowcontrol.NewBackOff(time.Second, time.Minute)
 		fakeClock := util.NewFakeClock(time.Now())
 		backOff.Clock = fakeClock
 
@@ -107,7 +108,7 @@ func TestSerializedPuller(t *testing.T) {
 		fakeRecorder := &record.FakeRecorder{}
 		puller := NewSerializedImagePuller(fakeRecorder, fakeRuntime, backOff)
 
-		fakeRuntime.ImageList = []Image{{"present_image", nil, 0}}
+		fakeRuntime.ImageList = []Image{{"present_image", nil, nil, 0}}
 		fakeRuntime.Err = c.pullerErr
 		fakeRuntime.InspectErr = c.inspectErr
 

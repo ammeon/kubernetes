@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/diff"
 
 	"github.com/google/gofuzz"
 )
@@ -54,7 +54,7 @@ func doDeepCopyTest(t *testing.T, kind unversioned.GroupVersionKind, f *fuzz.Fuz
 	}
 
 	if !reflect.DeepEqual(item, itemCopy) {
-		t.Errorf("\nexpected: %#v\n\ngot:      %#v\n\ndiff:      %v", item, itemCopy, util.ObjectGoPrintSideBySide(item, itemCopy))
+		t.Errorf("\nexpected: %#v\n\ngot:      %#v\n\ndiff:      %v", item, itemCopy, diff.ObjectReflectDiff(item, itemCopy))
 	}
 }
 

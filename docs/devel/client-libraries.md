@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/devel/client-libraries.md).
+[here](http://releases.k8s.io/release-1.3/docs/devel/client-libraries.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -40,7 +40,8 @@ Documentation for other releases can be found at
 
 ### User Contributed
 
-*Note: Libraries provided by outside parties are supported by their authors, not the core Kubernetes team*
+*Note: Libraries provided by outside parties are supported by their authors, not
+the core Kubernetes team*
 
    * [Clojure](https://github.com/yanatan16/clj-kubernetes-api)
    * [Java (OSGi)](https://bitbucket.org/amdatulabs/amdatu-kubernetes)

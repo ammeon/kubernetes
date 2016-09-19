@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,6 +35,14 @@ kube::build::run_build_command hack/build-cross.sh
 if [[ $KUBE_RELEASE_RUN_TESTS =~ ^[yY]$ ]]; then
   kube::build::run_build_command hack/test-go.sh
   kube::build::run_build_command hack/test-integration.sh
+fi
+
+if [[ "${FEDERATION:-}" == "true" ]];then
+    (
+	source "${KUBE_ROOT}/build/util.sh"
+	# Write federated docker image tag to workspace
+	kube::release::semantic_image_tag_version > "${KUBE_ROOT}/federation/manifests/federated-image.tag"
+    )
 fi
 
 kube::build::copy_output

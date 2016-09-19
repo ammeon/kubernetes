@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -70,7 +70,18 @@ func (c *RESTClient) Delete() *restclient.Request {
 }
 
 func (c *RESTClient) request(verb string) *restclient.Request {
-	return restclient.NewRequest(c, verb, &url.URL{Host: "localhost"}, "", restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: c.Codec}, nil, nil)
+	config := restclient.ContentConfig{
+		ContentType:  runtime.ContentTypeJSON,
+		GroupVersion: testapi.Default.GroupVersion(),
+		Codec:        c.Codec,
+	}
+	serializers := restclient.Serializers{
+		Encoder:             c.Codec,
+		Decoder:             c.Codec,
+		StreamingSerializer: c.Codec,
+		Framer:              runtime.DefaultFramer,
+	}
+	return restclient.NewRequest(c, verb, &url.URL{Host: "localhost"}, "", config, serializers, nil, nil)
 }
 
 func (c *RESTClient) Do(req *http.Request) (*http.Response, error) {

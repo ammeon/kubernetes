@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -60,7 +60,7 @@ func newReplicationController(replicas int) *api.ReplicationController {
 			ResourceVersion: "18",
 		},
 		Spec: api.ReplicationControllerSpec{
-			Replicas: replicas,
+			Replicas: int32(replicas),
 			Selector: map[string]string{"foo": "bar"},
 			Template: &api.PodTemplateSpec{
 				ObjectMeta: api.ObjectMeta{
@@ -242,8 +242,7 @@ func TestCreatePods(t *testing.T) {
 		ResponseBody: string(body),
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	// TODO: Uncomment when fix #19254
-	// defer testServer.Close()
+	defer testServer.Close()
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: testServer.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
 	podControl := RealPodControl{

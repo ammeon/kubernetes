@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -217,7 +217,7 @@ func TestIsZero(t *testing.T) {
 	}
 	for testName, testCase := range testCases {
 		if result := IsZero(testCase.a); result != testCase.expected {
-			t.Errorf("%s expected: %v, actual: %v", testName, testCase.expected)
+			t.Errorf("%s expected: %v, actual: %v", testName, testCase.expected, result)
 		}
 	}
 }

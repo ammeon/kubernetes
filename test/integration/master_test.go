@@ -1,7 +1,7 @@
 // +build integration,!no-etcd
 
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,22 +21,27 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghodss/yaml"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/apis/batch/v2alpha1"
+	"k8s.io/kubernetes/pkg/client/restclient"
+	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
 func testPrefix(t *testing.T, prefix string) {
-	_, s := framework.RunAMaster(t)
-	// TODO: Uncomment when fix #19254
-	// defer s.Close()
+	_, s := framework.RunAMaster(nil)
+	defer s.Close()
 
 	resp, err := http.Get(s.URL + prefix)
 	if err != nil {
@@ -55,14 +60,17 @@ func TestBatchPrefix(t *testing.T) {
 	testPrefix(t, "/apis/batch/")
 }
 
+func TestAppsPrefix(t *testing.T) {
+	testPrefix(t, "/apis/apps/")
+}
+
 func TestExtensionsPrefix(t *testing.T) {
 	testPrefix(t, "/apis/extensions/")
 }
 
 func TestWatchSucceedsWithoutArgs(t *testing.T) {
-	_, s := framework.RunAMaster(t)
-	// TODO: Uncomment when fix #19254
-	// defer s.Close()
+	_, s := framework.RunAMaster(nil)
+	defer s.Close()
 
 	resp, err := http.Get(s.URL + "/api/v1/namespaces?watch=1")
 	if err != nil {
@@ -108,7 +116,7 @@ func extensionsPath(resource, namespace, name string) string {
 }
 
 func TestAutoscalingGroupBackwardCompatibility(t *testing.T) {
-	_, s := framework.RunAMaster(t)
+	_, s := framework.RunAMaster(nil)
 	defer s.Close()
 	transport := http.DefaultTransport
 
@@ -248,7 +256,10 @@ var deleteResp string = `
 // Job share storage.  This test can be deleted when Jobs is removed from ext/v1beta1,
 // (expected to happen in 1.4).
 func TestBatchGroupBackwardCompatibility(t *testing.T) {
-	_, s := framework.RunAMaster(t)
+	if *testapi.Batch.GroupVersion() == v2alpha1.SchemeGroupVersion {
+		t.Skip("Shared job storage is not required for batch/v2alpha1.")
+	}
+	_, s := framework.RunAMaster(nil)
 	defer s.Close()
 	transport := http.DefaultTransport
 
@@ -301,9 +312,8 @@ func TestBatchGroupBackwardCompatibility(t *testing.T) {
 }
 
 func TestAccept(t *testing.T) {
-	_, s := framework.RunAMaster(t)
-	// TODO: Uncomment when fix #19254
-	// defer s.Close()
+	_, s := framework.RunAMaster(nil)
+	defer s.Close()
 
 	resp, err := http.Get(s.URL + "/api/")
 	if err != nil {
@@ -368,5 +378,48 @@ func TestAccept(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotAcceptable {
 		t.Errorf("unexpected error from the server")
+	}
+}
+
+func countEndpoints(eps *api.Endpoints) int {
+	count := 0
+	for i := range eps.Subsets {
+		count += len(eps.Subsets[i].Addresses) * len(eps.Subsets[i].Ports)
+	}
+	return count
+}
+
+func TestMasterService(t *testing.T) {
+	_, s := framework.RunAMaster(framework.NewIntegrationTestMasterConfig())
+	defer s.Close()
+
+	client := client.NewOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
+
+	err := wait.Poll(time.Second, time.Minute, func() (bool, error) {
+		svcList, err := client.Services(api.NamespaceDefault).List(api.ListOptions{})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			return false, nil
+		}
+		found := false
+		for i := range svcList.Items {
+			if svcList.Items[i].Name == "kubernetes" {
+				found = true
+			}
+		}
+		if found {
+			ep, err := client.Endpoints(api.NamespaceDefault).Get("kubernetes")
+			if err != nil {
+				return false, nil
+			}
+			if countEndpoints(ep) == 0 {
+				return false, fmt.Errorf("no endpoints for kubernetes service: %v", ep)
+			}
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

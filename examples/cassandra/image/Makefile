@@ -1,4 +1,4 @@
-# Copyright 2016 The Kubernetes Authors All rights reserved.
+# Copyright 2016 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 
 # build the cassandra image.
 
-VERSION=v8
+VERSION=v9
 
 all: build
 
-kubernetes-cassandra.jar: ../java/* ../java/src/io/k8s/cassandra/*.java
+kubernetes-cassandra.jar: ../java/* ../java/src/main/java/io/k8s/cassandra/*.java
 	cd ../java && mvn package
 	mv ../java/target/kubernetes-cassandra*.jar kubernetes-cassandra.jar
 	cd ../java && mvn clean

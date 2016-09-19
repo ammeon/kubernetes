@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -120,7 +120,7 @@ type genSet struct {
 	generator.DefaultGen
 	outputPackage string
 	typeToMatch   *types.Type
-	imports       *generator.ImportTracker
+	imports       namer.ImportTracker
 }
 
 // Filter ignores all but one type because we're making a single file per type.

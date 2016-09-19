@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -107,7 +107,7 @@ func expectNoAnnotation(t *testing.T, pod *api.Pod) {
 func admit(t *testing.T, ir admission.Interface, pods []*api.Pod) {
 	for i := range pods {
 		p := pods[i]
-		if err := ir.Admit(admission.NewAttributesRecord(p, api.Kind("Pod"), "test", p.ObjectMeta.Name, api.Resource("pods"), "", admission.Create, nil)); err != nil {
+		if err := ir.Admit(admission.NewAttributesRecord(p, nil, api.Kind("Pod").WithVersion("version"), "test", p.ObjectMeta.Name, api.Resource("pods").WithVersion("version"), "", admission.Create, nil)); err != nil {
 			t.Error(err)
 		}
 	}

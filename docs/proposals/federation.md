@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/proposals/federation.md).
+[here](http://releases.k8s.io/release-1.3/docs/proposals/federation.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -78,7 +78,7 @@ The above use cases are by necessity left imprecisely defined.  The
 rest of this document explores these use cases and their implications
 in further detail, and compares a few alternative high level
 approaches to addressing them.  The idea of cluster federation has
-informally become known as_ "Ubernetes"_.
+informally become known as _"Ubernetes"_.
 
 ## Summary/TL;DR
 

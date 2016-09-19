@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ func TestAdmission(t *testing.T) {
 			Containers: []api.Container{{Name: "ctr", Image: "image"}},
 		},
 	}
-	err := handler.Admit(admission.NewAttributesRecord(&pod, api.Kind("Pod"), pod.Namespace, pod.Name, api.Resource("pods"), "", admission.Create, nil))
+	err := handler.Admit(admission.NewAttributesRecord(&pod, nil, api.Kind("Pod").WithVersion("version"), pod.Namespace, pod.Name, api.Resource("pods").WithVersion("version"), "", admission.Create, nil))
 	if err != nil {
 		t.Errorf("Unexpected error returned from admission handler")
 	}
@@ -75,7 +75,7 @@ func TestAdmissionNamespaceExists(t *testing.T) {
 			Containers: []api.Container{{Name: "ctr", Image: "image"}},
 		},
 	}
-	err := handler.Admit(admission.NewAttributesRecord(&pod, api.Kind("Pod"), pod.Namespace, pod.Name, api.Resource("pods"), "", admission.Create, nil))
+	err := handler.Admit(admission.NewAttributesRecord(&pod, nil, api.Kind("Pod").WithVersion("version"), pod.Namespace, pod.Name, api.Resource("pods").WithVersion("version"), "", admission.Create, nil))
 	if err != nil {
 		t.Errorf("Unexpected error returned from admission handler")
 	}
@@ -96,7 +96,7 @@ func TestIgnoreAdmission(t *testing.T) {
 			Containers: []api.Container{{Name: "ctr", Image: "image"}},
 		},
 	}
-	err := handler.Admit(admission.NewAttributesRecord(&pod, api.Kind("Pod"), pod.Namespace, pod.Name, api.Resource("pods"), "", admission.Update, nil))
+	err := handler.Admit(admission.NewAttributesRecord(&pod, nil, api.Kind("Pod").WithVersion("version"), pod.Namespace, pod.Name, api.Resource("pods").WithVersion("version"), "", admission.Update, nil))
 	if err != nil {
 		t.Errorf("Unexpected error returned from admission handler")
 	}
@@ -125,7 +125,7 @@ func TestAdmissionNamespaceExistsUnknownToHandler(t *testing.T) {
 			Containers: []api.Container{{Name: "ctr", Image: "image"}},
 		},
 	}
-	err := handler.Admit(admission.NewAttributesRecord(&pod, api.Kind("Pod"), pod.Namespace, pod.Name, api.Resource("pods"), "", admission.Create, nil))
+	err := handler.Admit(admission.NewAttributesRecord(&pod, nil, api.Kind("Pod").WithVersion("version"), pod.Namespace, pod.Name, api.Resource("pods").WithVersion("version"), "", admission.Create, nil))
 	if err != nil {
 		t.Errorf("Unexpected error returned from admission handler")
 	}

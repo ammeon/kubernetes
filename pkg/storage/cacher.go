@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package storage
 
 import (
 	"fmt"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -25,11 +26,13 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/rest"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -69,19 +72,13 @@ type CacherConfig struct {
 type Cacher struct {
 	sync.RWMutex
 
-	// Each user-facing method that is not simply redirected to the underlying
-	// storage has to read-lock on this mutex before starting any processing.
+	// Before accessing the cacher's cache, wait for the ready to be ok.
 	// This is necessary to prevent users from accessing structures that are
 	// uninitialized or are being repopulated right now.
-	// NOTE: We cannot easily reuse the main mutex for it due to multi-threaded
-	// interactions of Cacher with the underlying WatchCache. Since Cacher is
-	// caling WatchCache directly and WatchCache is calling Cacher methods
-	// via its OnEvent and OnReplace hooks, we explicitly assume that if mutexes
-	// of both structures are held, the one from WatchCache is acquired first
-	// to avoid deadlocks. Unfortunately, forcing this rule in startCaching
-	// would be very difficult and introducing one more mutex seems to be much
-	// easier.
-	usable sync.RWMutex
+	// ready needs to be set to false when the cacher is paused or stopped.
+	// ready needs to be set to true when the cacher is ready to use after
+	// initialization.
+	ready *ready
 
 	// Underlying storage.Interface.
 	storage Interface
@@ -110,37 +107,6 @@ type Cacher struct {
 // Create a new Cacher responsible from service WATCH and LIST requests from its
 // internal cache and updating its cache in the background based on the given
 // configuration.
-func NewCacher(
-	storage Interface,
-	capacity int,
-	versioner Versioner,
-	objectType runtime.Object,
-	resourcePrefix string,
-	scopeStrategy rest.NamespaceScopedStrategy,
-	newListFunc func() runtime.Object) Interface {
-	config := CacherConfig{
-		CacheCapacity:  capacity,
-		Storage:        storage,
-		Versioner:      versioner,
-		Type:           objectType,
-		ResourcePrefix: resourcePrefix,
-		NewListFunc:    newListFunc,
-	}
-	if scopeStrategy.NamespaceScoped() {
-		config.KeyFunc = func(obj runtime.Object) (string, error) {
-			return NamespaceKeyFunc(resourcePrefix, obj)
-		}
-	} else {
-		config.KeyFunc = func(obj runtime.Object) (string, error) {
-			return NoNamespaceKeyFunc(resourcePrefix, obj)
-		}
-	}
-	return NewCacherFromConfig(config)
-}
-
-// Create a new Cacher responsible from service WATCH and LIST requests from its
-// internal cache and updating its cache in the background based on the given
-// configuration.
 func NewCacherFromConfig(config CacherConfig) *Cacher {
 	watchCache := newWatchCache(config.CacheCapacity)
 	listerWatcher := newCacherListerWatcher(config.Storage, config.ResourcePrefix, config.NewListFunc)
@@ -154,25 +120,20 @@ func NewCacherFromConfig(config CacherConfig) *Cacher {
 	}
 
 	cacher := &Cacher{
-		usable:     sync.RWMutex{},
+		ready:      newReady(),
 		storage:    config.Storage,
 		watchCache: watchCache,
 		reflector:  cache.NewReflector(listerWatcher, config.Type, watchCache, 0),
-		watcherIdx: 0,
 		watchers:   make(map[int]*cacheWatcher),
 		versioner:  config.Versioner,
 		keyFunc:    config.KeyFunc,
-		stopped:    false,
 		// We need to (potentially) stop both:
 		// - wait.Until go-routine
 		// - reflector.ListAndWatch
 		// and there are no guarantees on the order that they will stop.
 		// So we will be simply closing the channel, and synchronizing on the WaitGroup.
 		stopCh: make(chan struct{}),
-		stopWg: sync.WaitGroup{},
 	}
-	// See startCaching method for explanation and where this is unlocked.
-	cacher.usable.Lock()
 	watchCache.SetOnEvent(cacher.processEvent)
 
 	stopCh := cacher.stopCh
@@ -200,11 +161,11 @@ func (c *Cacher) startCaching(stopChannel <-chan struct{}) {
 	successfulList := false
 	c.watchCache.SetOnReplace(func() {
 		successfulList = true
-		c.usable.Unlock()
+		c.ready.set(true)
 	})
 	defer func() {
 		if successfulList {
-			c.usable.Lock()
+			c.ready.set(false)
 		}
 	}()
 
@@ -234,13 +195,8 @@ func (c *Cacher) Create(ctx context.Context, key string, obj, out runtime.Object
 }
 
 // Implements storage.Interface.
-func (c *Cacher) Set(ctx context.Context, key string, obj, out runtime.Object, ttl uint64) error {
-	return c.storage.Set(ctx, key, obj, out, ttl)
-}
-
-// Implements storage.Interface.
-func (c *Cacher) Delete(ctx context.Context, key string, out runtime.Object) error {
-	return c.storage.Delete(ctx, key, out)
+func (c *Cacher) Delete(ctx context.Context, key string, out runtime.Object, preconditions *Preconditions) error {
+	return c.storage.Delete(ctx, key, out, preconditions)
 }
 
 // Implements storage.Interface.
@@ -250,9 +206,7 @@ func (c *Cacher) Watch(ctx context.Context, key string, resourceVersion string, 
 		return nil, err
 	}
 
-	// Do NOT allow Watch to start when the underlying structures are not propagated.
-	c.usable.RLock()
-	defer c.usable.RUnlock()
+	c.ready.wait()
 
 	// We explicitly use thread unsafe version and do locking ourself to ensure that
 	// no new events will be processed in the meantime. The watchCache will be unlocked
@@ -263,12 +217,15 @@ func (c *Cacher) Watch(ctx context.Context, key string, resourceVersion string, 
 	defer c.watchCache.RUnlock()
 	initEvents, err := c.watchCache.GetAllEventsSinceThreadUnsafe(watchRV)
 	if err != nil {
-		return nil, err
+		// To match the uncached watch implementation, once we have passed authn/authz/admission,
+		// and successfully parsed a resource version, other errors must fail with a watch event of type ERROR,
+		// rather than a directly returned error.
+		return newErrWatcher(err), nil
 	}
 
 	c.Lock()
 	defer c.Unlock()
-	watcher := newCacheWatcher(initEvents, filterFunction(key, c.keyFunc, filter), forgetWatcher(c, c.watcherIdx))
+	watcher := newCacheWatcher(watchRV, initEvents, filterFunction(key, c.keyFunc, filter), forgetWatcher(c, c.watcherIdx))
 	c.watchers[c.watcherIdx] = watcher
 	c.watcherIdx++
 	return watcher, nil
@@ -306,13 +263,7 @@ func (c *Cacher) List(ctx context.Context, key string, resourceVersion string, f
 		return err
 	}
 
-	// To avoid situation when List is processed before the underlying
-	// watchCache is propagated for the first time, we acquire and immediately
-	// release the 'usable' lock.
-	// We don't need to hold it all the time, because watchCache is thread-safe
-	// and it would complicate already very difficult locking pattern.
-	c.usable.RLock()
-	c.usable.RUnlock()
+	c.ready.wait()
 
 	// List elements from cache, with at least 'listRV'.
 	listPtr, err := meta.GetItemsPtr(listObj)
@@ -347,8 +298,8 @@ func (c *Cacher) List(ctx context.Context, key string, resourceVersion string, f
 }
 
 // Implements storage.Interface.
-func (c *Cacher) GuaranteedUpdate(ctx context.Context, key string, ptrToType runtime.Object, ignoreNotFound bool, tryUpdate UpdateFunc) error {
-	return c.storage.GuaranteedUpdate(ctx, key, ptrToType, ignoreNotFound, tryUpdate)
+func (c *Cacher) GuaranteedUpdate(ctx context.Context, key string, ptrToType runtime.Object, ignoreNotFound bool, preconditions *Preconditions, tryUpdate UpdateFunc) error {
+	return c.storage.GuaranteedUpdate(ctx, key, ptrToType, ignoreNotFound, preconditions, tryUpdate)
 }
 
 // Implements storage.Interface.
@@ -415,18 +366,13 @@ func filterFunction(key string, keyFunc func(runtime.Object) (string, error), fi
 
 // Returns resource version to which the underlying cache is synced.
 func (c *Cacher) LastSyncResourceVersion() (uint64, error) {
-	// To avoid situation when LastSyncResourceVersion is processed before the
-	// underlying watchCache is propagated, we acquire 'usable' lock.
-	c.usable.RLock()
-	defer c.usable.RUnlock()
-
-	c.RLock()
-	defer c.RUnlock()
+	c.ready.wait()
 
 	resourceVersion := c.reflector.LastSyncResourceVersion()
 	if resourceVersion == "" {
 		return 0, nil
 	}
+
 	return strconv.ParseUint(resourceVersion, 10, 64)
 }
 
@@ -459,6 +405,46 @@ func (lw *cacherListerWatcher) Watch(options api.ListOptions) (watch.Interface, 
 	return lw.storage.WatchList(context.TODO(), lw.resourcePrefix, options.ResourceVersion, Everything)
 }
 
+// cacherWatch implements watch.Interface to return a single error
+type errWatcher struct {
+	result chan watch.Event
+}
+
+func newErrWatcher(err error) *errWatcher {
+	// Create an error event
+	errEvent := watch.Event{Type: watch.Error}
+	switch err := err.(type) {
+	case runtime.Object:
+		errEvent.Object = err
+	case *errors.StatusError:
+		errEvent.Object = &err.ErrStatus
+	default:
+		errEvent.Object = &unversioned.Status{
+			Status:  unversioned.StatusFailure,
+			Message: err.Error(),
+			Reason:  unversioned.StatusReasonInternalError,
+			Code:    http.StatusInternalServerError,
+		}
+	}
+
+	// Create a watcher with room for a single event, populate it, and close the channel
+	watcher := &errWatcher{result: make(chan watch.Event, 1)}
+	watcher.result <- errEvent
+	close(watcher.result)
+
+	return watcher
+}
+
+// Implements watch.Interface.
+func (c *errWatcher) ResultChan() <-chan watch.Event {
+	return c.result
+}
+
+// Implements watch.Interface.
+func (c *errWatcher) Stop() {
+	// no-op
+}
+
 // cacherWatch implements watch.Interface
 type cacheWatcher struct {
 	sync.Mutex
@@ -469,7 +455,7 @@ type cacheWatcher struct {
 	forget  func(bool)
 }
 
-func newCacheWatcher(initEvents []watchCacheEvent, filter FilterFunc, forget func(bool)) *cacheWatcher {
+func newCacheWatcher(resourceVersion uint64, initEvents []watchCacheEvent, filter FilterFunc, forget func(bool)) *cacheWatcher {
 	watcher := &cacheWatcher{
 		input:   make(chan watchCacheEvent, 10),
 		result:  make(chan watch.Event, 10),
@@ -477,7 +463,7 @@ func newCacheWatcher(initEvents []watchCacheEvent, filter FilterFunc, forget fun
 		stopped: false,
 		forget:  forget,
 	}
-	go watcher.process(initEvents)
+	go watcher.process(initEvents, resourceVersion)
 	return watcher
 }
 
@@ -501,12 +487,39 @@ func (c *cacheWatcher) stop() {
 	}
 }
 
+var timerPool sync.Pool
+
 func (c *cacheWatcher) add(event watchCacheEvent) {
+	// Try to send the event immediately, without blocking.
 	select {
 	case c.input <- event:
-	case <-time.After(5 * time.Second):
+		return
+	default:
+	}
+
+	// OK, block sending, but only for up to 5 seconds.
+	// cacheWatcher.add is called very often, so arrange
+	// to reuse timers instead of constantly allocating.
+	const timeout = 5 * time.Second
+	t, ok := timerPool.Get().(*time.Timer)
+	if ok {
+		t.Reset(timeout)
+	} else {
+		t = time.NewTimer(timeout)
+	}
+	defer timerPool.Put(t)
+
+	select {
+	case c.input <- event:
+		stopped := t.Stop()
+		if !stopped {
+			// Consume triggered (but not yet received) timer event
+			// so that future reuse does not get a spurious timeout.
+			<-t.C
+		}
+	case <-t.C:
 		// This means that we couldn't send event to that watcher.
-		// Since we don't want to blockin on it infinitely,
+		// Since we don't want to block on it infinitely,
 		// we simply terminate it.
 		c.forget(false)
 		c.stop()
@@ -539,7 +552,9 @@ func (c *cacheWatcher) sendWatchCacheEvent(event watchCacheEvent) {
 	}
 }
 
-func (c *cacheWatcher) process(initEvents []watchCacheEvent) {
+func (c *cacheWatcher) process(initEvents []watchCacheEvent, resourceVersion uint64) {
+	defer utilruntime.HandleCrash()
+
 	for _, event := range initEvents {
 		c.sendWatchCacheEvent(event)
 	}
@@ -550,6 +565,33 @@ func (c *cacheWatcher) process(initEvents []watchCacheEvent) {
 		if !ok {
 			return
 		}
-		c.sendWatchCacheEvent(event)
+		// only send events newer than resourceVersion
+		if event.ResourceVersion > resourceVersion {
+			c.sendWatchCacheEvent(event)
+		}
 	}
+}
+
+type ready struct {
+	ok bool
+	c  *sync.Cond
+}
+
+func newReady() *ready {
+	return &ready{c: sync.NewCond(&sync.Mutex{})}
+}
+
+func (r *ready) wait() {
+	r.c.L.Lock()
+	for !r.ok {
+		r.c.Wait()
+	}
+	r.c.L.Unlock()
+}
+
+func (r *ready) set(ok bool) {
+	r.c.L.Lock()
+	defer r.c.L.Unlock()
+	r.ok = ok
+	r.c.Broadcast()
 }

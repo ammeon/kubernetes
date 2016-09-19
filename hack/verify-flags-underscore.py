@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,8 +53,10 @@ def get_all_files(rootdir):
     all_files = []
     for root, dirs, files in os.walk(rootdir):
         # don't visit certain dirs
-        if 'Godeps' in dirs:
-            dirs.remove('Godeps')
+        if 'vendor' in dirs:
+            dirs.remove('vendor')
+        if '_output' in dirs:
+            dirs.remove('_output')
         if '_gopath' in dirs:
             dirs.remove('_gopath')
         if 'third_party' in dirs:

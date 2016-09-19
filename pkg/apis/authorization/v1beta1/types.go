@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -100,6 +100,9 @@ type SubjectAccessReviewSpec struct {
 	User string `json:"user,omitempty"`
 	// Groups is the groups you're testing for.
 	Groups []string `json:"group,omitempty"`
+	// Extra corresponds to the user.Info.GetExtra() method from the authenticator.  Since that is input to the authorizer
+	// it needs a reflection here.
+	Extra map[string][]string `json:"extra,omitempty"`
 }
 
 // SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes
