@@ -21,8 +21,47 @@ set -o nounset
 set -o pipefail
 set -o xtrace
 
+# include shell2junit library
+source <(curl -fsS --retry 3 'https://raw.githubusercontent.com/kubernetes/kubernetes/master/third_party/forked/shell2junit/sh2ju.sh')
+
+# Have cmd/e2e run by goe2e.sh generate JUnit report in ${WORKSPACE}/junit*.xml
+ARTIFACTS=${WORKSPACE}/_artifacts
+mkdir -p ${ARTIFACTS}
+
+# E2E runner stages
+STAGE_PRE="PRE-SETUP"
+STAGE_SETUP="SETUP"
+STAGE_CLEANUP="CLEANUP"
+STAGE_KUBEMARK="KUBEMARK"
+
 : ${KUBE_GCS_RELEASE_BUCKET:="kubernetes-release"}
 : ${KUBE_GCS_DEV_RELEASE_BUCKET:="kubernetes-release-dev"}
+
+# record_command runs the command and records its output/error messages in junit format
+# it expects the first argument to be the class and the second to be the name of the command
+# Example:
+# record_command PRESETUP curltest curl google.com
+# record_command CLEANUP check false
+#
+# WARNING: Variable changes in the command will NOT be effective after record_command returns.
+#          This is because the command runs in subshell.
+function record_command() {
+    set +o xtrace
+    set +o nounset
+    set +o errexit
+
+    local class=$1
+    shift
+    local name=$1
+    shift
+    echo "Recording: ${class} ${name}"
+    echo "Running command: $@"
+    juLog -output="${ARTIFACTS}" -class="${class}" -name="${name}" "$@"
+
+    set -o nounset
+    set -o errexit
+    set -o xtrace
+}
 
 function running_in_docker() {
     grep -q docker /proc/self/cgroup
@@ -114,7 +153,7 @@ function install_google_cloud_sdk_tarball() {
     tar xzf "${tarball}" -C "${install_dir}"
 
     export CLOUDSDK_CORE_DISABLE_PROMPTS=1
-    "${install_dir}/google-cloud-sdk/install.sh" --disable-installation-options --bash-completion=false --path-update=false --usage-reporting=false
+    record_command "${STAGE_PRE}" "install_gcloud" "${install_dir}/google-cloud-sdk/install.sh" --disable-installation-options --bash-completion=false --path-update=false --usage-reporting=false
     export PATH=${install_dir}/google-cloud-sdk/bin:${PATH}
 }
 
@@ -144,7 +183,7 @@ function dump_cluster_logs() {
 
 ### Pre Set Up ###
 if running_in_docker; then
-    curl -fsSL --retry 3 --keepalive-time 2 -o "${WORKSPACE}/google-cloud-sdk.tar.gz" 'https://dl.google.com/dl/cloudsdk/channels/rapid/google-cloud-sdk.tar.gz'
+    record_command "${STAGE_PRE}" "download_gcloud" curl -fsSL --retry 3 --keepalive-time 2 -o "${WORKSPACE}/google-cloud-sdk.tar.gz" 'https://dl.google.com/dl/cloudsdk/channels/rapid/google-cloud-sdk.tar.gz'
     install_google_cloud_sdk_tarball "${WORKSPACE}/google-cloud-sdk.tar.gz" /
     if [[ "${KUBERNETES_PROVIDER}" == 'aws' ]]; then
         pip install awscli
@@ -176,13 +215,22 @@ if [[ -n "${JENKINS_GCI_IMAGE_FAMILY:-}" ]]; then
   GCI_STAGING_PROJECT=container-vm-image-staging
   export KUBE_GCE_MASTER_PROJECT="${GCI_STAGING_PROJECT}"
   export KUBE_GCE_MASTER_IMAGE="$(get_latest_gci_image "${GCI_STAGING_PROJECT}" "${JENKINS_GCI_IMAGE_FAMILY}")"
-  export KUBE_OS_DISTRIBUTION="gci"
-  if [[ "${JENKINS_GCI_IMAGE_FAMILY}" == "gci-preview-test" ]]; then
-    # The family "gci-preview-test" is reserved for a special type of GCI images
+  export KUBE_MASTER_OS_DISTRIBUTION="gci"
+  if [[ "${JENKINS_GCI_IMAGE_FAMILY}" == "gci-canary-test" ]]; then
+    # The family "gci-canary-test" is reserved for a special type of GCI images
     # that are used to continuously validate Docker releases.
     export KUBE_GCI_DOCKER_VERSION="$(get_latest_docker_release)"
   fi
 fi
+
+if [[ -f "${KUBEKINS_SERVICE_ACCOUNT_FILE:-}" ]]; then
+  echo 'Activating service account...'  # No harm in doing this multiple times.
+  gcloud auth activate-service-account --key-file="${KUBEKINS_SERVICE_ACCOUNT_FILE}"
+  unset KUBEKINS_SERVICE_ACCOUNT_FILE
+elif [[ -n "${KUBEKINS_SERVICE_ACCOUNT_FILE:-}" ]]; then
+  echo "ERROR: cannot access service account file at: ${KUBEKINS_SERVICE_ACCOUNT_FILE}"
+fi
+
 
 function e2e_test() {
     local -r ginkgo_test_args="${1}"
@@ -283,9 +331,6 @@ if [[ ! "${JOB_NAME}" =~ -pull- ]]; then
     JENKINS_BUILD_STARTED=true bash <(curl -fsS --retry 3 --keepalive-time 2 "https://raw.githubusercontent.com/kubernetes/kubernetes/master/hack/jenkins/upload-to-gcs.sh")
 fi
 
-# Have cmd/e2e run by goe2e.sh generate JUnit report in ${WORKSPACE}/junit*.xml
-ARTIFACTS=${WORKSPACE}/_artifacts
-mkdir -p ${ARTIFACTS}
 # When run inside Docker, we need to make sure all files are world-readable
 # (since they will be owned by root on the host).
 trap "chmod -R o+r '${ARTIFACTS}'" EXIT SIGINT SIGTERM
@@ -345,11 +390,11 @@ if [[ -n "${JENKINS_PUBLISHED_SKEW_VERSION:-}" ]]; then
     if [[ "${JENKINS_USE_SKEW_TESTS:-}" != "true" ]]; then
         # Back out into the old tests now that we've downloaded & maybe upgraded.
         cd ../kubernetes_old
-	# Append kubectl-path of skewed kubectl to test args, since we always
-	# want that to use the skewed kubectl version:
-	#
-	# - for upgrade jobs, we want kubectl to be at the same version as master.
-	# - for client skew tests, we want to use the skewed kubectl (that's what we're testing).
+        # Append kubectl-path of skewed kubectl to test args, since we always
+        # want that to use the skewed kubectl version:
+        #
+        # - for upgrade jobs, we want kubectl to be at the same version as master.
+        # - for client skew tests, we want to use the skewed kubectl (that's what we're testing).
         GINKGO_TEST_ARGS="${GINKGO_TEST_ARGS:-} --kubectl-path=$(pwd)/../kubernetes/cluster/kubectl.sh"
     fi
 fi
@@ -404,11 +449,16 @@ fi
 # * neither started nor destroyed (soak test)
 if [[ "${E2E_UP:-}" == "${E2E_DOWN:-}" && -f "${gcp_resources_before}" && -f "${gcp_resources_after}" ]]; then
   difference=$(diff -sw -U0 -F'^\[.*\]$' "${gcp_resources_before}" "${gcp_resources_after}") || true
+  noleak=true
   if [[ -n $(echo "${difference}" | tail -n +3 | grep -E "^\+") ]] && [[ "${FAIL_ON_GCP_RESOURCE_LEAK:-}" == "true" ]]; then
+    noleak=false
+  fi
+  if ! ${noleak} ; then
     echo "${difference}"
     echo "!!! FAIL: Google Cloud Platform resources leaked while running tests!"
     EXIT_CODE=1
   fi
+  record_command "${STAGE_CLEANUP}" "gcp_resource_leak_check" ${noleak}
 fi
 
 exit ${EXIT_CODE}

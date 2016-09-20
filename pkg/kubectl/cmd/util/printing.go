@@ -47,12 +47,12 @@ func AddOutputFlagsForMutation(cmd *cobra.Command) {
 
 // AddOutputFlags adds output related flags to a command.
 func AddOutputFlags(cmd *cobra.Command) {
-	cmd.Flags().StringP("output", "o", "", "Output format. One of: json|yaml|wide|name|go-template=...|go-template-file=...|jsonpath=...|jsonpath-file=... See golang template [http://golang.org/pkg/text/template/#pkg-overview] and jsonpath template [http://kubernetes.io/docs/user-guide/jsonpath].")
+	cmd.Flags().StringP("output", "o", "", "Output format. One of: json|yaml|wide|name|custom-columns=...|custom-columns-file=...|go-template=...|go-template-file=...|jsonpath=...|jsonpath-file=... See custom columns [http://kubernetes.io/docs/user-guide/kubectl-overview/#custom-columns], golang template [http://golang.org/pkg/text/template/#pkg-overview] and jsonpath template [http://kubernetes.io/docs/user-guide/jsonpath].")
 }
 
 // AddNoHeadersFlags adds no-headers flags to a command.
 func AddNoHeadersFlags(cmd *cobra.Command) {
-	cmd.Flags().Bool("no-headers", false, "When using the default output, don't print headers.")
+	cmd.Flags().Bool("no-headers", false, "When using the default or custom-column output format, don't print headers.")
 }
 
 // PrintSuccess prints message after finishing mutating operations
@@ -121,7 +121,7 @@ func PrinterForCommand(cmd *cobra.Command) (kubectl.ResourcePrinter, bool, error
 		}
 	}
 
-	printer, generic, err := kubectl.GetPrinter(outputFormat, templateFile)
+	printer, generic, err := kubectl.GetPrinter(outputFormat, templateFile, GetFlagBool(cmd, "no-headers"))
 	if err != nil {
 		return nil, generic, err
 	}

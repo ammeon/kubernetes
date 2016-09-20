@@ -1,83 +1,105 @@
 <!-- BEGIN MUNGE: GENERATED_TOC -->
 
-- [v1.3.0](#v130)
+- [v1.3.2](#v132)
   - [Downloads](#downloads)
+  - [Changelog since v1.3.1](#changelog-since-v131)
+    - [Other notable changes](#other-notable-changes)
+- [v1.3.1](#v131)
+  - [Downloads](#downloads-1)
+  - [Changelog since v1.3.0](#changelog-since-v130)
+    - [Other notable changes](#other-notable-changes-1)
+- [v1.2.6](#v126)
+  - [Downloads](#downloads-2)
+  - [Changelog since v1.2.5](#changelog-since-v125)
+    - [Other notable changes](#other-notable-changes-2)
+- [v1.4.0-alpha.1](#v140-alpha1)
+  - [Downloads](#downloads-3)
+  - [Changelog since v1.3.0](#changelog-since-v130-1)
+    - [Experimental Features](#experimental-features)
+    - [Action Required](#action-required)
+    - [Other notable changes](#other-notable-changes-3)
+- [v1.3.0](#v130)
+  - [Downloads](#downloads-4)
   - [Highlights](#highlights)
   - [Known Issues and Important Steps before Upgrading](#known-issues-and-important-steps-before-upgrading)
+      - [ThirdPartyResource](#thirdpartyresource)
+      - [kubectl](#kubectl)
+      - [kubernetes Core Known Issues](#kubernetes-core-known-issues)
+      - [Docker runtime Known Issues](#docker-runtime-known-issues)
+      - [Rkt runtime Known Issues](#rkt-runtime-known-issues)
   - [Provider-specific Notes](#provider-specific-notes)
-    - [Previous Releases Included in v1.3.0](#previous-releases-included-in-v130)
+  - [Previous Releases Included in v1.3.0](#previous-releases-included-in-v130)
 - [v1.3.0-beta.3](#v130-beta3)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-5)
   - [Changelog since v1.3.0-beta.2](#changelog-since-v130-beta2)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-1)
+    - [Other notable changes](#other-notable-changes-4)
 - [v1.2.5](#v125)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-6)
   - [Changes since v1.2.4](#changes-since-v124)
-    - [Other notable changes](#other-notable-changes)
+    - [Other notable changes](#other-notable-changes-5)
 - [v1.3.0-beta.2](#v130-beta2)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-7)
   - [Changes since v1.3.0-beta.1](#changes-since-v130-beta1)
-    - [Experimental Features](#experimental-features)
-    - [Other notable changes](#other-notable-changes)
+    - [Experimental Features](#experimental-features-1)
+    - [Other notable changes](#other-notable-changes-6)
 - [v1.3.0-beta.1](#v130-beta1)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-8)
   - [Changes since v1.3.0-alpha.5](#changes-since-v130-alpha5)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-2)
+    - [Other notable changes](#other-notable-changes-7)
 - [v1.3.0-alpha.5](#v130-alpha5)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-9)
   - [Changes since v1.3.0-alpha.4](#changes-since-v130-alpha4)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-3)
+    - [Other notable changes](#other-notable-changes-8)
 - [v1.3.0-alpha.4](#v130-alpha4)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-10)
   - [Changes since v1.3.0-alpha.3](#changes-since-v130-alpha3)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-4)
+    - [Other notable changes](#other-notable-changes-9)
 - [v1.2.4](#v124)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-11)
   - [Changes since v1.2.3](#changes-since-v123)
-    - [Other notable changes](#other-notable-changes)
+    - [Other notable changes](#other-notable-changes-10)
 - [v1.3.0-alpha.3](#v130-alpha3)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-12)
   - [Changes since v1.3.0-alpha.2](#changes-since-v130-alpha2)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-5)
+    - [Other notable changes](#other-notable-changes-11)
 - [v1.2.3](#v123)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-13)
   - [Changes since v1.2.2](#changes-since-v122)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Action Required](#action-required-6)
+    - [Other notable changes](#other-notable-changes-12)
 - [v1.3.0-alpha.2](#v130-alpha2)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-14)
   - [Changes since v1.3.0-alpha.1](#changes-since-v130-alpha1)
-    - [Other notable changes](#other-notable-changes)
+    - [Other notable changes](#other-notable-changes-13)
 - [v1.2.2](#v122)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-15)
   - [Changes since v1.2.1](#changes-since-v121)
-    - [Other notable changes](#other-notable-changes)
+    - [Other notable changes](#other-notable-changes-14)
 - [v1.2.1](#v121)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-16)
   - [Changes since v1.2.0](#changes-since-v120)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+    - [Other notable changes](#other-notable-changes-15)
 - [v1.3.0-alpha.1](#v130-alpha1)
-  - [Downloads](#downloads)
-  - [Changes since v1.2.0](#changes-since-v120)
-    - [Action Required](#action-required)
-    - [Other notable changes](#other-notable-changes)
+  - [Downloads](#downloads-17)
+  - [Changes since v1.2.0](#changes-since-v120-1)
+    - [Action Required](#action-required-7)
+    - [Other notable changes](#other-notable-changes-16)
 - [v1.2.0](#v120)
-  - [Downloads](#downloads)
+  - [Downloads](#downloads-18)
   - [Changes since v1.1.1](#changes-since-v111)
     - [Major Themes](#major-themes)
     - [Other notable improvements](#other-notable-improvements)
-    - [Experimental Features](#experimental-features)
-    - [Action required](#action-required)
+    - [Experimental Features](#experimental-features-2)
+    - [Action required](#action-required-8)
     - [Known Issues](#known-issues)
       - [Docker Known Issues](#docker-known-issues)
         - [1.9.1](#191)
-    - [Provider-specific Notes](#provider-specific-notes)
+    - [Provider-specific Notes](#provider-specific-notes-1)
       - [Various](#various)
       - [AWS](#aws)
       - [GCE](#gce)
@@ -85,6 +107,125 @@
 <!-- END MUNGE: GENERATED_TOC -->
 
 <!-- NEW RELEASE NOTES ENTRY -->
+
+
+# v1.3.2
+
+[Documentation](http://kubernetes.github.io) & [Examples](http://releases.k8s.io/release-1.3/examples)
+
+## Downloads
+
+binary | sha1 hash | md5 hash
+------ | --------- | --------
+[kubernetes.tar.gz](https://storage.googleapis.com/kubernetes-release/release/v1.3.2/kubernetes.tar.gz) | `f46664d04dc2966c77d8727bba57f57b5f917572` | `1a5b0639941054585d0432dd5ce3abc7`
+
+## Changelog since v1.3.1
+
+### Other notable changes
+
+* List all nodes and occupy cidr map before starting allocations ([#29062](https://github.com/kubernetes/kubernetes/pull/29062), [@bprashanth](https://github.com/bprashanth))
+* Fix watch cache filtering ([#28968](https://github.com/kubernetes/kubernetes/pull/28968), [@liggitt](https://github.com/liggitt))
+* Lock all possible kubecfg files at the beginning of ModifyConfig. ([#28232](https://github.com/kubernetes/kubernetes/pull/28232), [@cjcullen](https://github.com/cjcullen))
+
+
+
+# v1.3.1
+
+[Documentation](http://kubernetes.github.io) & [Examples](http://releases.k8s.io/release-1.3.0/examples)
+
+## Downloads
+
+binary | sha1 hash | md5 hash
+------ | --------- | --------
+[kubernetes.tar.gz](https://storage.googleapis.com/kubernetes-release/release/v1.3.1/kubernetes.tar.gz) | `5645b12beda22137204439de8260c62c9925f89b` | `ae6e9902ec70c1322d9a0a29ef385190`
+
+## Changelog since v1.3.0
+
+### Other notable changes
+
+* Fix watch cache filtering ([#29046](https://github.com/kubernetes/kubernetes/pull/29046), [@liggitt](https://github.com/liggitt))
+
+
+
+# v1.2.6
+
+[Documentation](http://kubernetes.github.io) & [Examples](http://releases.k8s.io/release-1.2/examples)
+
+## Downloads
+
+binary | sha1 hash | md5 hash
+------ | --------- | --------
+[kubernetes.tar.gz](https://storage.googleapis.com/kubernetes-release/release/v1.2.6/kubernetes.tar.gz) | `50023455d00af52c41a7158b4bd117b2dfd4a100` | `cf0411bcb620eb13b08b93578efffc43`
+
+## Changelog since v1.2.5
+
+### Other notable changes
+
+* Fix watch cache filtering ([#28967](https://github.com/kubernetes/kubernetes/pull/28967), [@liggitt](https://github.com/liggitt))
+* Fix problems with container restarts and flocker ([#25874](https://github.com/kubernetes/kubernetes/pull/25874), [@simonswine](https://github.com/simonswine))
+
+
+
+# v1.4.0-alpha.1
+
+[Documentation](http://kubernetes.github.io) & [Examples](http://releases.k8s.io/master/examples)
+
+## Downloads
+
+binary | sha1 hash | md5 hash
+------ | --------- | --------
+[kubernetes.tar.gz](https://storage.googleapis.com/kubernetes-release/release/v1.4.0-alpha.1/kubernetes.tar.gz) | `11a199208c5164a291c1767a1b9e64e45fdea747` | `334f349daf9268d8ac091d7fcc8e4626`
+
+## Changelog since v1.3.0
+
+### Experimental Features
+
+* An alpha implementation of the the TLS bootstrap API described in docs/proposals/kubelet-tls-bootstrap.md. ([#25562](https://github.com/kubernetes/kubernetes/pull/25562), [@gtank](https://github.com/gtank))
+
+### Action Required
+
+* [kubelet] Allow opting out of automatic cloud provider detection in kubelet. By default kubelet will auto-detect cloud providers ([#28258](https://github.com/kubernetes/kubernetes/pull/28258), [@vishh](https://github.com/vishh))
+* If you use one of the kube-dns replication controller manifest in `cluster/saltbase/salt/kube-dns`, i.e. `cluster/saltbase/salt/kube-dns/{skydns-rc.yaml.base,skydns-rc.yaml.in}`, either substitute one of `__PILLAR__FEDERATIONS__DOMAIN__MAP__` or `{{ pillar['federations_domain_map'] }}` with the corresponding federation name to domain name value or remove them if you do not support cluster federation at this time. If you plan to substitute the parameter with its value, here is an example for `{{ pillar['federations_domain_map'] }` ([#28132](https://github.com/kubernetes/kubernetes/pull/28132), [@madhusudancs](https://github.com/madhusudancs))
+    * pillar['federations_domain_map'] = "- --federations=myfederation=federation.test"
+    * where `myfederation` is the name of the federation and `federation.test` is the domain name registered for the federation.
+* Proportionally scale paused and rolling deployments ([#20273](https://github.com/kubernetes/kubernetes/pull/20273), [@kargakis](https://github.com/kargakis))
+
+### Other notable changes
+
+* Support --all-namespaces in kubectl describe ([#26315](https://github.com/kubernetes/kubernetes/pull/26315), [@dims](https://github.com/dims))
+* Add checks in Create and Update Cgroup methods ([#28566](https://github.com/kubernetes/kubernetes/pull/28566), [@dubstack](https://github.com/dubstack))
+* Update coreos node e2e image to a version that uses cgroupfs ([#28661](https://github.com/kubernetes/kubernetes/pull/28661), [@dubstack](https://github.com/dubstack))
+* Don't delete affinity when endpoints are empty ([#28655](https://github.com/kubernetes/kubernetes/pull/28655), [@freehan](https://github.com/freehan))
+* Enable memory based pod evictions by default on the kubelet.   ([#28607](https://github.com/kubernetes/kubernetes/pull/28607), [@derekwaynecarr](https://github.com/derekwaynecarr))
+    * Trigger pod eviction when available memory falls below 100Mi.
+* Enable extensions/v1beta1/NetworkPolicy by default ([#28549](https://github.com/kubernetes/kubernetes/pull/28549), [@caseydavenport](https://github.com/caseydavenport))
+* MESOS: Support a pre-installed km binary at a well known, agent-local path ([#28447](https://github.com/kubernetes/kubernetes/pull/28447), [@k82cn](https://github.com/k82cn))
+* kubectl should print usage at the bottom ([#25640](https://github.com/kubernetes/kubernetes/pull/25640), [@dims](https://github.com/dims))
+* A new command "kubectl config get-contexts" has been added. ([#25463](https://github.com/kubernetes/kubernetes/pull/25463), [@asalkeld](https://github.com/asalkeld))
+* kubectl: ignore only update conflicts in the scaler ([#27048](https://github.com/kubernetes/kubernetes/pull/27048), [@kargakis](https://github.com/kargakis))
+* Declare out of disk when there is no free inodes ([#28176](https://github.com/kubernetes/kubernetes/pull/28176), [@ronnielai](https://github.com/ronnielai))
+* Includes the number of free inodes in stat summary ([#28173](https://github.com/kubernetes/kubernetes/pull/28173), [@ronnielai](https://github.com/ronnielai))
+* kubectl: don't display an empty list when trying to get a single resource that isn't found ([#28294](https://github.com/kubernetes/kubernetes/pull/28294), [@ncdc](https://github.com/ncdc))
+* Graceful deletion bumps object's generation ([#27269](https://github.com/kubernetes/kubernetes/pull/27269), [@gmarek](https://github.com/gmarek))
+* Allow specifying secret data using strings ([#28263](https://github.com/kubernetes/kubernetes/pull/28263), [@liggitt](https://github.com/liggitt))
+* kubectl help now provides "Did you mean this?" suggestions for typo/invalid command names. ([#27049](https://github.com/kubernetes/kubernetes/pull/27049), [@andreykurilin](https://github.com/andreykurilin))
+* Lock all possible kubecfg files at the beginning of ModifyConfig. ([#28232](https://github.com/kubernetes/kubernetes/pull/28232), [@cjcullen](https://github.com/cjcullen))
+* Enable HTTP2 by default ([#28114](https://github.com/kubernetes/kubernetes/pull/28114), [@timothysc](https://github.com/timothysc))
+* Influxdb migrated to PetSet and PersistentVolumes. ([#28109](https://github.com/kubernetes/kubernetes/pull/28109), [@jszczepkowski](https://github.com/jszczepkowski))
+* Change references to gs://kubernetes-release/ci ([#28193](https://github.com/kubernetes/kubernetes/pull/28193), [@zmerlynn](https://github.com/zmerlynn))
+* Build: Add KUBE_GCS_RELEASE_BUCKET_MIRROR option to push-ci-build.sh ([#28172](https://github.com/kubernetes/kubernetes/pull/28172), [@zmerlynn](https://github.com/zmerlynn))
+* Skip multi-zone e2e tests unless provider is GCE, GKE or AWS ([#27871](https://github.com/kubernetes/kubernetes/pull/27871), [@lukaszo](https://github.com/lukaszo))
+* Making DHCP_OPTION_SET_ID creation optional ([#27278](https://github.com/kubernetes/kubernetes/pull/27278), [@activars](https://github.com/activars))
+* Convert service account token controller to use a work queue ([#23858](https://github.com/kubernetes/kubernetes/pull/23858), [@liggitt](https://github.com/liggitt))
+* Adding OWNERS for federation ([#28042](https://github.com/kubernetes/kubernetes/pull/28042), [@nikhiljindal](https://github.com/nikhiljindal))
+* Modifying the default container GC policy parameters ([#27881](https://github.com/kubernetes/kubernetes/pull/27881), [@ronnielai](https://github.com/ronnielai))
+* Kubelet can retrieve host IP even when apiserver has not been contacted ([#27508](https://github.com/kubernetes/kubernetes/pull/27508), [@aaronlevy](https://github.com/aaronlevy))
+* Add the Patch method to the generated clientset. ([#27293](https://github.com/kubernetes/kubernetes/pull/27293), [@caesarxuchao](https://github.com/caesarxuchao))
+* let patch use --local flag like `kubectl set image` ([#26722](https://github.com/kubernetes/kubernetes/pull/26722), [@deads2k](https://github.com/deads2k))
+* enable recursive processing in kubectl edit ([#25085](https://github.com/kubernetes/kubernetes/pull/25085), [@metral](https://github.com/metral))
+* Image GC logic should compensate for reserved blocks ([#27996](https://github.com/kubernetes/kubernetes/pull/27996), [@ronnielai](https://github.com/ronnielai))
+* Bump minimum API version for docker to 1.21 ([#27208](https://github.com/kubernetes/kubernetes/pull/27208), [@yujuhong](https://github.com/yujuhong))
+* Adding lock files for kubeconfig updating ([#28034](https://github.com/kubernetes/kubernetes/pull/28034), [@krousey](https://github.com/krousey))
 
 
 # v1.3.0
@@ -121,7 +262,7 @@ binary | sha1 hash | md5 hash
   * Display line number on JSON errors
   * Add flag -t as shorthand for --tty
 * Resources
-  * Improved node stability by *optionally* evicting pods upon memory pressure - [Design Doc](https://github.com/kubernetes/kubernetes/blob/release-1.3/docs/proposals/kubelet-eviction.md) 
+  * Improved node stability by *optionally* evicting pods upon memory pressure - [Design Doc](https://github.com/kubernetes/kubernetes/blob/release-1.3/docs/proposals/kubelet-eviction.md)
   * **alpha**: NVIDIA GPU support ([#24836](https://github.com/kubernetes/kubernetes/pull/24836), [@therc](https://github.com/therc))
   * Adding loadBalancer services and nodeports services to quota system
 
@@ -131,13 +272,28 @@ The following versions of Docker Engine are supported - *[v1.10](https://github.
 Although *v1.9* is still compatible, we recommend upgrading to one of the supported versions.
 All prior versions of docker will not be supported.
 
+#### ThirdPartyResource
+
+If you use ThirdPartyResource objects, they have moved from being namespaced-scoped to be cluster-scoped. Before upgrading to 1.3.0, export and delete any existing ThirdPartyResource objects using a 1.2.x client:
+
+kubectl get thirdpartyresource --all-namespaces -o yaml > tprs.yaml
+kubectl delete -f tprs.yaml
+
+After upgrading to 1.3.0, re-register the third party resource objects at the root scope (using a 1.3 server and client):
+
+kubectl create -f tprs.yaml
+
+#### kubectl
+
+Kubectl flag `--container-port` flag is deprecated: it will be removed in the future, please use `--target-port` instead.
+
 #### kubernetes Core Known Issues
 
 - Kube Proxy crashes infrequently due to a docker bug ([#24000](https://github.com/docker/docker/issues/24000))
   - This issue can be resolved by restarting docker daemon
 - CORS works only in insecure mode ([#24086](https://github.com/kubernetes/kubernetes/issues/24086))
 - Persistent volume claims gets added incorrectly after being deleted under stress. Happens very infrequently. ([#26082](https://github.com/kubernetes/kubernetes/issues/26082))
- 
+
 #### Docker runtime Known Issues
 
 - Kernel crash with Aufs storage driver on Debian Jessie ([#27885](https://github.com/kubernetes/kubernetes/issues/27885))
@@ -179,7 +335,7 @@ All prior versions of docker will not be supported.
 * VSphere:
   * Provider updated.
 
-### Previous Releases Included in v1.3.0
+## Previous Releases Included in v1.3.0
 
 - [v1.3.0-beta.3](CHANGELOG.md#v130-beta3)
 - [v1.3.0-beta.2](CHANGELOG.md#v130-beta2)
@@ -999,7 +1155,7 @@ by Kubernetes. Changes were introduced in PR [#13580](https://github.com/kuberne
 or GA.
   * New Flex Volume Plugin enables users to use out-of-process volume plugins that
 are installed to “/usr/libexec/kubernetes/kubelet-plugins/volume/exec/” on
-every node, instead of being compiled into the Kubernetes binary. See [example](examples/flexvolume/README.md) for details.
+every node, instead of being compiled into the Kubernetes binary. See [example](examples/volumes/flexvolume/README.md) for details.
   * vendor volumes into a pod. It expects vendor drivers are installed in the
 volume plugin path on each kubelet node. This is an alpha feature and may
 change in future.

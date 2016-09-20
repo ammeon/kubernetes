@@ -46,6 +46,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/controller"
+	certcontroller "k8s.io/kubernetes/pkg/controller/certificates"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
 	endpointcontroller "k8s.io/kubernetes/pkg/controller/endpoint"
@@ -72,7 +73,6 @@ import (
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/kubernetes/pkg/util/configz"
 	"k8s.io/kubernetes/pkg/util/crypto"
-	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/golang/glog"
@@ -216,6 +216,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		ResyncPeriod(s),
 		replicationcontroller.BurstReplicas,
 		int(s.LookupCacheSizeForRC),
+		s.EnableGarbageCollector,
 	).Run(int(s.ConcurrentRCSyncs), wait.NeverStop)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
@@ -238,10 +239,13 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 	if err != nil {
 		glog.Warningf("Unsuccessful parsing of service CIDR %v: %v", s.ServiceCIDR, err)
 	}
-	nodeController := nodecontroller.NewNodeController(cloud, clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "node-controller")),
-		s.PodEvictionTimeout.Duration, flowcontrol.NewTokenBucketRateLimiter(s.DeletingPodsQps, int(s.DeletingPodsBurst)),
-		flowcontrol.NewTokenBucketRateLimiter(s.DeletingPodsQps, int(s.DeletingPodsBurst)),
-		s.NodeMonitorGracePeriod.Duration, s.NodeStartupGracePeriod.Duration, s.NodeMonitorPeriod.Duration, clusterCIDR, serviceCIDR, int(s.NodeCIDRMaskSize), s.AllocateNodeCIDRs)
+	nodeController, err := nodecontroller.NewNodeController(cloud, clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "node-controller")),
+		s.PodEvictionTimeout.Duration, s.DeletingPodsQps, s.NodeMonitorGracePeriod.Duration,
+		s.NodeStartupGracePeriod.Duration, s.NodeMonitorPeriod.Duration, clusterCIDR, serviceCIDR,
+		int(s.NodeCIDRMaskSize), s.AllocateNodeCIDRs)
+	if err != nil {
+		glog.Fatalf("Failed to initialize nodecontroller: %v", err)
+	}
 	nodeController.Run(s.NodeSyncPeriod.Duration)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
@@ -420,6 +424,29 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 	}
 
+	groupVersion = "certificates/v1alpha1"
+	resources, found = resourceMap[groupVersion]
+	glog.Infof("Attempting to start certificates, full resource map %+v", resourceMap)
+	if containsVersion(versions, groupVersion) && found {
+		glog.Infof("Starting %s apis", groupVersion)
+		if containsResource(resources, "certificatesigningrequests") {
+			glog.Infof("Starting certificate request controller")
+			resyncPeriod := ResyncPeriod(s)()
+			certController, err := certcontroller.NewCertificateController(
+				clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "certificate-controller")),
+				resyncPeriod,
+				s.ClusterSigningCertFile,
+				s.ClusterSigningKeyFile,
+			)
+			if err != nil {
+				glog.Errorf("Failed to start certificate controller: %v", err)
+			} else {
+				go certController.Run(1, wait.NeverStop)
+			}
+			time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
+		}
+	}
+
 	var rootCA []byte
 
 	if s.RootCAFile != "" {
@@ -468,7 +495,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 			glog.Errorf("Failed to start the generic garbage collector")
 		} else {
 			// TODO: make this a flag of kube-controller-manager
-			workers := 5
+			workers := int(s.ConcurrentGCSyncs)
 			go garbageCollector.Run(workers, wait.NeverStop)
 		}
 	}

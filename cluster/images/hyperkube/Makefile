@@ -20,7 +20,7 @@
 REGISTRY?=gcr.io/google_containers
 ARCH?=amd64
 TEMP_DIR:=$(shell mktemp -d)
-CNI_RELEASE=c864f0e1ea73719b8f4582402b0847064f9883b0
+CNI_RELEASE=8a936732094c0941e1543ef5d292a1f4fffa1ac5
 
 UNAME_S:=$(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -57,8 +57,8 @@ endif
 	mkdir -p ${TEMP_DIR}/cni ${TEMP_DIR}/addons
 	cp ../../saltbase/salt/helpers/safe_format_and_mount ${TEMP_DIR}
 	cp ../../saltbase/salt/generate-cert/make-ca-cert.sh ${TEMP_DIR}
-	cp ../../saltbase/salt/kube-dns/skydns-rc.yaml.base ${TEMP_DIR}/addons/skydns-rc.yaml
-	cp ../../saltbase/salt/kube-dns/skydns-svc.yaml.base ${TEMP_DIR}/addons/skydns-svc.yaml
+	cp ../../addons/dns/skydns-rc.yaml.base ${TEMP_DIR}/addons/skydns-rc.yaml
+	cp ../../addons/dns/skydns-svc.yaml.base ${TEMP_DIR}/addons/skydns-svc.yaml
 	cp ../../addons/dashboard/dashboard-controller.yaml ${TEMP_DIR}/addons
 	cp ../../addons/dashboard/dashboard-service.yaml ${TEMP_DIR}/addons
 	

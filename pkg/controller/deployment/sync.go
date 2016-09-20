@@ -28,12 +28,23 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/controller"
-	deploymentutil "k8s.io/kubernetes/pkg/util/deployment"
+	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	labelsutil "k8s.io/kubernetes/pkg/util/labels"
 	podutil "k8s.io/kubernetes/pkg/util/pod"
 	rsutil "k8s.io/kubernetes/pkg/util/replicaset"
 )
+
+// syncStatusOnly only updates Deployments Status and doesn't take any mutating actions.
+func (dc *DeploymentController) syncStatusOnly(deployment *extensions.Deployment) error {
+	newRS, oldRSs, err := dc.getAllReplicaSetsAndSyncRevision(deployment, false)
+	if err != nil {
+		return err
+	}
+
+	allRSs := append(oldRSs, newRS)
+	return dc.syncDeploymentStatus(allRSs, newRS, deployment)
+}
 
 // sync is responsible for reconciling deployments on scaling events or when they
 // are paused.
@@ -72,7 +83,7 @@ func (dc *DeploymentController) getAllReplicaSetsAndSyncRevision(deployment *ext
 	}
 
 	// Calculate the max revision number among all old RSes
-	maxOldV := maxRevision(allOldRSs)
+	maxOldV := deploymentutil.MaxRevision(allOldRSs)
 
 	// Get new replica set with the updated revision number
 	newRS, err := dc.getNewReplicaSet(deployment, rsList, maxOldV, allOldRSs, createIfNotExisted)
@@ -232,7 +243,7 @@ func (dc *DeploymentController) getNewReplicaSet(deployment *extensions.Deployme
 		return nil, err
 	} else if existingNewRS != nil {
 		// Set existing new replica set's annotation
-		if setNewReplicaSetAnnotations(deployment, existingNewRS, newRevision, true) {
+		if deploymentutil.SetNewReplicaSetAnnotations(deployment, existingNewRS, newRevision, true) {
 			return dc.client.Extensions().ReplicaSets(deployment.ObjectMeta.Namespace).Update(existingNewRS)
 		}
 		return existingNewRS, nil
@@ -270,10 +281,9 @@ func (dc *DeploymentController) getNewReplicaSet(deployment *extensions.Deployme
 
 	newRS.Spec.Replicas = newReplicasCount
 	// Set new replica set's annotation
-	setNewReplicaSetAnnotations(deployment, &newRS, newRevision, false)
+	deploymentutil.SetNewReplicaSetAnnotations(deployment, &newRS, newRevision, false)
 	createdRS, err := dc.client.Extensions().ReplicaSets(namespace).Create(&newRS)
 	if err != nil {
-		dc.enqueueDeployment(deployment)
 		return nil, fmt.Errorf("error creating replica set %v: %v", deployment.Name, err)
 	}
 	if newReplicasCount > 0 {
@@ -303,7 +313,7 @@ func (dc *DeploymentController) updateDeploymentRevision(deployment *extensions.
 func (dc *DeploymentController) scale(deployment *extensions.Deployment, newRS *extensions.ReplicaSet, oldRSs []*extensions.ReplicaSet) error {
 	// If there is only one active replica set then we should scale that up to the full count of the
 	// deployment. If there is no active replica set, then we should scale up the newest replica set.
-	if activeOrLatest := findActiveOrLatest(newRS, oldRSs); activeOrLatest != nil {
+	if activeOrLatest := deploymentutil.FindActiveOrLatest(newRS, oldRSs); activeOrLatest != nil {
 		if activeOrLatest.Spec.Replicas == deployment.Spec.Replicas {
 			return nil
 		}
@@ -331,7 +341,7 @@ func (dc *DeploymentController) scale(deployment *extensions.Deployment, newRS *
 
 		allowedSize := int32(0)
 		if deployment.Spec.Replicas > 0 {
-			allowedSize = deployment.Spec.Replicas + maxSurge(*deployment)
+			allowedSize = deployment.Spec.Replicas + deploymentutil.MaxSurge(*deployment)
 		}
 
 		// Number of additional replicas that can be either added or removed from the total
@@ -365,7 +375,7 @@ func (dc *DeploymentController) scale(deployment *extensions.Deployment, newRS *
 		for i := range allRSs {
 			rs := allRSs[i]
 
-			proportion := getProportion(rs, *deployment, deploymentReplicasToAdd, deploymentReplicasAdded)
+			proportion := deploymentutil.GetProportion(rs, *deployment, deploymentReplicasToAdd, deploymentReplicasAdded)
 
 			rs.Spec.Replicas += proportion
 			deploymentReplicasAdded += proportion
@@ -411,13 +421,10 @@ func (dc *DeploymentController) scaleReplicaSetAndRecordEvent(rs *extensions.Rep
 func (dc *DeploymentController) scaleReplicaSet(rs *extensions.ReplicaSet, newScale int32, deployment *extensions.Deployment, scalingOperation string) (*extensions.ReplicaSet, error) {
 	// NOTE: This mutates the ReplicaSet passed in. Not sure if that's a good idea.
 	rs.Spec.Replicas = newScale
-	setReplicasAnnotations(rs, deployment.Spec.Replicas, deployment.Spec.Replicas+maxSurge(*deployment))
+	deploymentutil.SetReplicasAnnotations(rs, deployment.Spec.Replicas, deployment.Spec.Replicas+deploymentutil.MaxSurge(*deployment))
 	rs, err := dc.client.Extensions().ReplicaSets(rs.ObjectMeta.Namespace).Update(rs)
 	if err == nil {
 		dc.eventRecorder.Eventf(deployment, api.EventTypeNormal, "ScalingReplicaSet", "Scaled %s replica set %s to %d", scalingOperation, rs.Name, newScale)
-	} else {
-		glog.Warningf("Cannot update replica set %q: %v", rs.Name, err)
-		dc.enqueueDeployment(deployment)
 	}
 	return rs, err
 }
@@ -515,7 +522,7 @@ func (dc *DeploymentController) isScalingEvent(d *extensions.Deployment) bool {
 	}
 	allRSs := append(oldRSs, newRS)
 	for _, rs := range controller.FilterActiveReplicaSets(allRSs) {
-		desired, ok := getDesiredReplicasAnnotation(rs)
+		desired, ok := deploymentutil.GetDesiredReplicasAnnotation(rs)
 		if !ok {
 			continue
 		}

@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	commontest "k8s.io/kubernetes/test/e2e/common"
 	"k8s.io/kubernetes/test/e2e/framework"
 
 	"github.com/golang/glog"
@@ -96,7 +97,7 @@ var _ = BeforeSuite(func() {
 	maskLocksmithdOnCoreos()
 
 	if *startServices {
-		e2es = newE2eService(framework.TestContext.NodeName)
+		e2es = newE2eService(framework.TestContext.NodeName, framework.TestContext.CgroupsPerQOS)
 		if err := e2es.start(); err != nil {
 			Fail(fmt.Sprintf("Unable to start node services.\n%v", err))
 		}
@@ -104,6 +105,9 @@ var _ = BeforeSuite(func() {
 	} else {
 		glog.Infof("Running tests without starting services.")
 	}
+
+	// Reference common test to make the import valid.
+	commontest.CurrentSuite = commontest.NodeE2E
 })
 
 // Tear down the kubelet on the node

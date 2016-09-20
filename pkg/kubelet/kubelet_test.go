@@ -22,13 +22,11 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"net/http"
 	"os"
 	"reflect"
 	goruntime "runtime"
 	"sort"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -67,13 +65,13 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/bandwidth"
 	"k8s.io/kubernetes/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/util/rand"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/kubernetes/pkg/util/term"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/pkg/volume"
@@ -99,16 +97,6 @@ const (
 	minImgSize int64 = 23 * 1024 * 1024
 	maxImgSize int64 = 1000 * 1024 * 1024
 )
-
-type fakeHTTP struct {
-	url string
-	err error
-}
-
-func (f *fakeHTTP) Get(url string) (*http.Response, error) {
-	f.url = url
-	return nil, f.err
-}
 
 type TestKubelet struct {
 	kubelet          *Kubelet
@@ -188,6 +176,7 @@ func newTestKubeletWithImageList(
 	fakeRecorder := &record.FakeRecorder{}
 	fakeKubeClient := &fake.Clientset{}
 	kubelet := &Kubelet{}
+	kubelet.recorder = fakeRecorder
 	kubelet.kubeClient = fakeKubeClient
 	kubelet.os = &containertest.FakeOS{}
 
@@ -294,16 +283,26 @@ func newTestKubeletWithImageList(
 		t.Fatalf("failed to initialize VolumePluginMgr: %v", err)
 	}
 
+	kubelet.mounter = &mount.FakeMounter{}
 	kubelet.volumeManager, err = kubeletvolume.NewVolumeManager(
 		controllerAttachDetachEnabled,
 		kubelet.hostname,
 		kubelet.podManager,
 		fakeKubeClient,
 		kubelet.volumePluginMgr,
-		fakeRuntime)
+		fakeRuntime,
+		kubelet.mounter)
 	if err != nil {
 		t.Fatalf("failed to initialize volume manager: %v", err)
 	}
+
+	// enable active deadline handler
+	activeDeadlineHandler, err := newActiveDeadlineHandler(kubelet.statusManager, kubelet.recorder, kubelet.clock)
+	if err != nil {
+		t.Fatalf("can't initialize active deadline handler: %v", err)
+	}
+	kubelet.AddPodSyncLoopHandler(activeDeadlineHandler)
+	kubelet.AddPodSyncHandler(activeDeadlineHandler)
 
 	return &TestKubelet{kubelet, fakeRuntime, mockCadvisor, fakeKubeClient, fakeMirrorClient, fakeClock, nil, plug}
 }
@@ -434,7 +433,6 @@ func TestSyncPodsDeletesWhenSourcesAreReady(t *testing.T) {
 func TestVolumeAttachAndMountControllerDisabled(t *testing.T) {
 	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
 	kubelet := testKubelet.kubelet
-	kubelet.mounter = &mount.FakeMounter{}
 
 	pod := podWithUidNameNsSpec("12345678", "foo", "test", api.PodSpec{
 		Volumes: []api.Volume{
@@ -505,7 +503,6 @@ func TestVolumeAttachAndMountControllerDisabled(t *testing.T) {
 func TestVolumeUnmountAndDetachControllerDisabled(t *testing.T) {
 	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
 	kubelet := testKubelet.kubelet
-	kubelet.mounter = &mount.FakeMounter{}
 
 	pod := podWithUidNameNsSpec("12345678", "foo", "test", api.PodSpec{
 		Volumes: []api.Volume{
@@ -617,7 +614,6 @@ func TestVolumeUnmountAndDetachControllerDisabled(t *testing.T) {
 func TestVolumeAttachAndMountControllerEnabled(t *testing.T) {
 	testKubelet := newTestKubelet(t, true /* controllerAttachDetachEnabled */)
 	kubelet := testKubelet.kubelet
-	kubelet.mounter = &mount.FakeMounter{}
 	kubeClient := testKubelet.fakeKubeClient
 	kubeClient.AddReactor("get", "nodes",
 		func(action core.Action) (bool, runtime.Object, error) {
@@ -712,7 +708,6 @@ func TestVolumeAttachAndMountControllerEnabled(t *testing.T) {
 func TestVolumeUnmountAndDetachControllerEnabled(t *testing.T) {
 	testKubelet := newTestKubelet(t, true /* controllerAttachDetachEnabled */)
 	kubelet := testKubelet.kubelet
-	kubelet.mounter = &mount.FakeMounter{}
 	kubeClient := testKubelet.fakeKubeClient
 	kubeClient.AddReactor("get", "nodes",
 		func(action core.Action) (bool, runtime.Object, error) {
@@ -1026,46 +1021,6 @@ func TestMakeVolumeMounts(t *testing.T) {
 	}
 }
 
-func TestNodeIPParam(t *testing.T) {
-	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
-	kubelet := testKubelet.kubelet
-	tests := []struct {
-		nodeIP   string
-		success  bool
-		testName string
-	}{
-		{
-			nodeIP:   "",
-			success:  true,
-			testName: "IP not set",
-		},
-		{
-			nodeIP:   "127.0.0.1",
-			success:  false,
-			testName: "loopback address",
-		},
-		{
-			nodeIP:   "FE80::0202:B3FF:FE1E:8329",
-			success:  false,
-			testName: "IPv6 address",
-		},
-		{
-			nodeIP:   "1.2.3.4",
-			success:  false,
-			testName: "IPv4 address that doesn't belong to host",
-		},
-	}
-	for _, test := range tests {
-		kubelet.nodeIP = net.ParseIP(test.nodeIP)
-		err := kubelet.validateNodeIP()
-		if err != nil && test.success {
-			t.Errorf("Test: %s, expected no error but got: %v", test.testName, err)
-		} else if err == nil && !test.success {
-			t.Errorf("Test: %s, expected an error", test.testName)
-		}
-	}
-}
-
 type fakeContainerCommandRunner struct {
 	Cmd    []string
 	ID     kubecontainer.ContainerID
@@ -1079,7 +1034,7 @@ type fakeContainerCommandRunner struct {
 	Stream io.ReadWriteCloser
 }
 
-func (f *fakeContainerCommandRunner) ExecInContainer(id kubecontainer.ContainerID, cmd []string, in io.Reader, out, err io.WriteCloser, tty bool) error {
+func (f *fakeContainerCommandRunner) ExecInContainer(id kubecontainer.ContainerID, cmd []string, in io.Reader, out, err io.WriteCloser, tty bool, resize <-chan term.Size) error {
 	f.Cmd = cmd
 	f.ID = id
 	f.Stdin = in
@@ -1148,76 +1103,6 @@ func TestRunInContainer(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-type countingDNSScrubber struct {
-	counter *int
-}
-
-func (cds countingDNSScrubber) ScrubDNS(nameservers, searches []string) (nsOut, srchOut []string) {
-	(*cds.counter)++
-	return nameservers, searches
-}
-
-func TestParseResolvConf(t *testing.T) {
-	testCases := []struct {
-		data        string
-		nameservers []string
-		searches    []string
-	}{
-		{"", []string{}, []string{}},
-		{" ", []string{}, []string{}},
-		{"\n", []string{}, []string{}},
-		{"\t\n\t", []string{}, []string{}},
-		{"#comment\n", []string{}, []string{}},
-		{" #comment\n", []string{}, []string{}},
-		{"#comment\n#comment", []string{}, []string{}},
-		{"#comment\nnameserver", []string{}, []string{}},
-		{"#comment\nnameserver\nsearch", []string{}, []string{}},
-		{"nameserver 1.2.3.4", []string{"1.2.3.4"}, []string{}},
-		{" nameserver 1.2.3.4", []string{"1.2.3.4"}, []string{}},
-		{"\tnameserver 1.2.3.4", []string{"1.2.3.4"}, []string{}},
-		{"nameserver\t1.2.3.4", []string{"1.2.3.4"}, []string{}},
-		{"nameserver \t 1.2.3.4", []string{"1.2.3.4"}, []string{}},
-		{"nameserver 1.2.3.4\nnameserver 5.6.7.8", []string{"1.2.3.4", "5.6.7.8"}, []string{}},
-		{"search foo", []string{}, []string{"foo"}},
-		{"search foo bar", []string{}, []string{"foo", "bar"}},
-		{"search foo bar bat\n", []string{}, []string{"foo", "bar", "bat"}},
-		{"search foo\nsearch bar", []string{}, []string{"bar"}},
-		{"nameserver 1.2.3.4\nsearch foo bar", []string{"1.2.3.4"}, []string{"foo", "bar"}},
-		{"nameserver 1.2.3.4\nsearch foo\nnameserver 5.6.7.8\nsearch bar", []string{"1.2.3.4", "5.6.7.8"}, []string{"bar"}},
-		{"#comment\nnameserver 1.2.3.4\n#comment\nsearch foo\ncomment", []string{"1.2.3.4"}, []string{"foo"}},
-	}
-	for i, tc := range testCases {
-		ns, srch, err := parseResolvConf(strings.NewReader(tc.data), nil)
-		if err != nil {
-			t.Errorf("expected success, got %v", err)
-			continue
-		}
-		if !reflect.DeepEqual(ns, tc.nameservers) {
-			t.Errorf("[%d] expected nameservers %#v, got %#v", i, tc.nameservers, ns)
-		}
-		if !reflect.DeepEqual(srch, tc.searches) {
-			t.Errorf("[%d] expected searches %#v, got %#v", i, tc.searches, srch)
-		}
-
-		counter := 0
-		cds := countingDNSScrubber{&counter}
-		ns, srch, err = parseResolvConf(strings.NewReader(tc.data), cds)
-		if err != nil {
-			t.Errorf("expected success, got %v", err)
-			continue
-		}
-		if !reflect.DeepEqual(ns, tc.nameservers) {
-			t.Errorf("[%d] expected nameservers %#v, got %#v", i, tc.nameservers, ns)
-		}
-		if !reflect.DeepEqual(srch, tc.searches) {
-			t.Errorf("[%d] expected searches %#v, got %#v", i, tc.searches, srch)
-		}
-		if counter != 1 {
-			t.Errorf("[%d] expected dnsScrubber to have been called: got %d", i, counter)
-		}
 	}
 }
 
@@ -2096,6 +1981,7 @@ func TestExecInContainerNoSuchPod(t *testing.T) {
 		nil,
 		nil,
 		false,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("unexpected non-error")
@@ -2140,6 +2026,7 @@ func TestExecInContainerNoSuchContainer(t *testing.T) {
 		nil,
 		nil,
 		false,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("unexpected non-error")
@@ -2200,6 +2087,7 @@ func TestExecInContainer(t *testing.T) {
 		stdout,
 		stderr,
 		tty,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
@@ -3891,33 +3779,6 @@ func TestMakePortMappings(t *testing.T) {
 	}
 }
 
-func TestIsPodPastActiveDeadline(t *testing.T) {
-	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
-	kubelet := testKubelet.kubelet
-	pods := newTestPods(5)
-
-	exceededActiveDeadlineSeconds := int64(30)
-	notYetActiveDeadlineSeconds := int64(120)
-	now := unversioned.Now()
-	startTime := unversioned.NewTime(now.Time.Add(-1 * time.Minute))
-	pods[0].Status.StartTime = &startTime
-	pods[0].Spec.ActiveDeadlineSeconds = &exceededActiveDeadlineSeconds
-	pods[1].Status.StartTime = &startTime
-	pods[1].Spec.ActiveDeadlineSeconds = &notYetActiveDeadlineSeconds
-	tests := []struct {
-		pod      *api.Pod
-		expected bool
-	}{{pods[0], true}, {pods[1], false}, {pods[2], false}, {pods[3], false}, {pods[4], false}}
-
-	kubelet.podManager.SetPods(pods)
-	for i, tt := range tests {
-		actual := kubelet.pastActiveDeadline(tt.pod)
-		if actual != tt.expected {
-			t.Errorf("[%d] expected %#v, got %#v", i, tt.expected, actual)
-		}
-	}
-}
-
 func TestSyncPodsSetStatusToFailedForPodsThatRunTooLong(t *testing.T) {
 	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
 	fakeRuntime := testKubelet.fakeRuntime
@@ -3965,7 +3826,7 @@ func TestSyncPodsSetStatusToFailedForPodsThatRunTooLong(t *testing.T) {
 		t.Errorf("expected to found status for pod %q", pods[0].UID)
 	}
 	if status.Phase != api.PodFailed {
-		t.Fatalf("expected pod status %q, ot %q.", api.PodFailed, status.Phase)
+		t.Fatalf("expected pod status %q, got %q.", api.PodFailed, status.Phase)
 	}
 }
 
@@ -4143,152 +4004,6 @@ func TestDoesNotDeletePodDirsIfContainerIsRunning(t *testing.T) {
 	pods = []*api.Pod{}
 	testKubelet.fakeRuntime.PodList = []*containertest.FakePod{}
 	syncAndVerifyPodDir(t, testKubelet, pods, []*api.Pod{apiPod}, false)
-}
-
-func TestCleanupBandwidthLimits(t *testing.T) {
-	testPod := func(name, ingress string) *api.Pod {
-		pod := podWithUidNameNs("", name, "")
-
-		if len(ingress) != 0 {
-			pod.Annotations["kubernetes.io/ingress-bandwidth"] = ingress
-		}
-
-		return pod
-	}
-
-	// TODO(random-liu): We removed the test case for pod status not cached here. We should add a higher
-	// layer status getter function and test that function instead.
-	tests := []struct {
-		status           *api.PodStatus
-		pods             []*api.Pod
-		inputCIDRs       []string
-		expectResetCIDRs []string
-		name             string
-	}{
-		{
-			status: &api.PodStatus{
-				PodIP: "1.2.3.4",
-				Phase: api.PodRunning,
-			},
-			pods: []*api.Pod{
-				testPod("foo", "10M"),
-				testPod("bar", ""),
-			},
-			inputCIDRs:       []string{"1.2.3.4/32", "2.3.4.5/32", "5.6.7.8/32"},
-			expectResetCIDRs: []string{"2.3.4.5/32", "5.6.7.8/32"},
-			name:             "pod running",
-		},
-		{
-			status: &api.PodStatus{
-				PodIP: "1.2.3.4",
-				Phase: api.PodFailed,
-			},
-			pods: []*api.Pod{
-				testPod("foo", "10M"),
-				testPod("bar", ""),
-			},
-			inputCIDRs:       []string{"1.2.3.4/32", "2.3.4.5/32", "5.6.7.8/32"},
-			expectResetCIDRs: []string{"1.2.3.4/32", "2.3.4.5/32", "5.6.7.8/32"},
-			name:             "pod not running",
-		},
-		{
-			status: &api.PodStatus{
-				PodIP: "1.2.3.4",
-				Phase: api.PodFailed,
-			},
-			pods: []*api.Pod{
-				testPod("foo", ""),
-				testPod("bar", ""),
-			},
-			inputCIDRs:       []string{"1.2.3.4/32", "2.3.4.5/32", "5.6.7.8/32"},
-			expectResetCIDRs: []string{"1.2.3.4/32", "2.3.4.5/32", "5.6.7.8/32"},
-			name:             "no bandwidth limits",
-		},
-	}
-	for _, test := range tests {
-		shaper := &bandwidth.FakeShaper{
-			CIDRs: test.inputCIDRs,
-		}
-
-		testKube := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
-		testKube.kubelet.shaper = shaper
-
-		for _, pod := range test.pods {
-			testKube.kubelet.statusManager.SetPodStatus(pod, *test.status)
-		}
-
-		err := testKube.kubelet.cleanupBandwidthLimits(test.pods)
-		if err != nil {
-			t.Errorf("unexpected error: %v (%s)", test.name, err)
-		}
-		if !reflect.DeepEqual(shaper.ResetCIDRs, test.expectResetCIDRs) {
-			t.Errorf("[%s]\nexpected: %v, saw: %v", test.name, test.expectResetCIDRs, shaper.ResetCIDRs)
-		}
-	}
-}
-
-func TestExtractBandwidthResources(t *testing.T) {
-	four, _ := resource.ParseQuantity("4M")
-	ten, _ := resource.ParseQuantity("10M")
-	twenty, _ := resource.ParseQuantity("20M")
-
-	testPod := func(ingress, egress string) *api.Pod {
-		pod := &api.Pod{ObjectMeta: api.ObjectMeta{Annotations: map[string]string{}}}
-		if len(ingress) != 0 {
-			pod.Annotations["kubernetes.io/ingress-bandwidth"] = ingress
-		}
-		if len(egress) != 0 {
-			pod.Annotations["kubernetes.io/egress-bandwidth"] = egress
-		}
-		return pod
-	}
-
-	tests := []struct {
-		pod             *api.Pod
-		expectedIngress *resource.Quantity
-		expectedEgress  *resource.Quantity
-		expectError     bool
-	}{
-		{
-			pod: &api.Pod{},
-		},
-		{
-			pod:             testPod("10M", ""),
-			expectedIngress: &ten,
-		},
-		{
-			pod:            testPod("", "10M"),
-			expectedEgress: &ten,
-		},
-		{
-			pod:             testPod("4M", "20M"),
-			expectedIngress: &four,
-			expectedEgress:  &twenty,
-		},
-		{
-			pod:         testPod("foo", ""),
-			expectError: true,
-		},
-	}
-	for _, test := range tests {
-		ingress, egress, err := bandwidth.ExtractPodBandwidthResources(test.pod.Annotations)
-		if test.expectError {
-			if err == nil {
-				t.Errorf("unexpected non-error")
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-			continue
-		}
-		if !reflect.DeepEqual(ingress, test.expectedIngress) {
-			t.Errorf("expected: %v, saw: %v", ingress, test.expectedIngress)
-		}
-		if !reflect.DeepEqual(egress, test.expectedEgress) {
-			t.Errorf("expected: %v, saw: %v", egress, test.expectedEgress)
-		}
-	}
 }
 
 func TestGetPodsToSync(t *testing.T) {
