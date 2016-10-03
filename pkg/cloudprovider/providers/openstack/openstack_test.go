@@ -17,20 +17,31 @@ limitations under the License.
 package openstack
 
 import (
+	"errors"
+	"log"
+	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"k8s.io/kubernetes/pkg/util/rand"
-
+	"github.com/pborman/uuid"
 	"github.com/rackspace/gophercloud"
+	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/layer3/routers"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/networks"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/subnets"
+
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/cloudprovider"
+	"k8s.io/kubernetes/pkg/util/rand"
 )
 
 const volumeAvailableStatus = "available"
 const volumeInUseStatus = "in-use"
 const volumeCreateTimeoutSeconds = 30
+
+var env TestEnvironment
 
 func WaitForVolumeStatus(t *testing.T, os *OpenStack, volumeName string, status string, timeoutSeconds int) {
 	timeout := timeoutSeconds
@@ -67,15 +78,15 @@ func TestReadConfig(t *testing.T) {
 	}
 
 	cfg, err := readConfig(strings.NewReader(`
- [Global]
- auth-url = http://auth.url
- username = user
- [LoadBalancer]
- create-monitor = yes
- monitor-delay = 1m
- monitor-timeout = 30s
- monitor-max-retries = 3
- `))
+[Global]
+auth-url = http://auth.url
+username = user
+[LoadBalancer]
+create-monitor = yes
+monitor-delay = 1m
+monitor-timeout = 30s
+monitor-max-retries = 3
+`))
 	if err != nil {
 		t.Fatalf("Should succeed when a valid config is provided: %s", err)
 	}
@@ -132,6 +143,7 @@ func configFromEnv() (cfg Config, ok bool) {
 	cfg.Global.Region = os.Getenv("OS_REGION_NAME")
 	cfg.Global.DomainId = os.Getenv("OS_DOMAIN_ID")
 	cfg.Global.DomainName = os.Getenv("OS_DOMAIN_NAME")
+	cfg.LoadBalancer.FloatingNetworkId = os.Getenv("OS_FLOATING_NETWORK_ID")
 
 	ok = (cfg.Global.AuthUrl != "" &&
 		cfg.Global.Username != "" &&
@@ -155,15 +167,7 @@ func TestNewOpenStack(t *testing.T) {
 }
 
 func TestInstances(t *testing.T) {
-	cfg, ok := configFromEnv()
-	if !ok {
-		t.Skipf("No config found in environment")
-	}
-
-	os, err := newOpenStack(cfg)
-	if err != nil {
-		t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
-	}
+	os := env.Openstack
 
 	i, ok := os.Instances()
 	if !ok {
@@ -275,15 +279,7 @@ func TestZones(t *testing.T) {
 }
 
 func TestVolumes(t *testing.T) {
-	cfg, ok := configFromEnv()
-	if !ok {
-		t.Skipf("No config found in environment")
-	}
-
-	os, err := newOpenStack(cfg)
-	if err != nil {
-		t.Fatalf("Failed to construct/authenticate OpenStack: %s", err)
-	}
+	os := env.Openstack
 
 	tags := map[string]string{
 		"test": "value",
@@ -296,7 +292,7 @@ func TestVolumes(t *testing.T) {
 
 	WaitForVolumeStatus(t, os, vol, volumeAvailableStatus, volumeCreateTimeoutSeconds)
 
-	diskId, err := os.AttachDisk(os.localInstanceID, vol)
+	diskId, err := os.AttachDisk(env.Servers[0].ID, vol)
 	if err != nil {
 		t.Fatalf("Cannot AttachDisk Cinder volume %s: %v", vol, err)
 	}
@@ -304,7 +300,7 @@ func TestVolumes(t *testing.T) {
 
 	WaitForVolumeStatus(t, os, vol, volumeInUseStatus, volumeCreateTimeoutSeconds)
 
-	err = os.DetachDisk(os.localInstanceID, vol)
+	err = os.DetachDisk(env.Servers[0].ID, vol)
 	if err != nil {
 		t.Fatalf("Cannot DetachDisk Cinder volume %s: %v", vol, err)
 	}
@@ -317,5 +313,214 @@ func TestVolumes(t *testing.T) {
 		t.Fatalf("Cannot delete Cinder volume %s: %v", vol, err)
 	}
 	t.Logf("Volume (%s) deleted\n", vol)
+
+}
+
+type TestEnvironment struct {
+	Subnet  *subnets.Subnet
+	Network *networks.Network
+	Router  *routers.Router
+
+	Servers   []*servers.Server
+	Openstack *OpenStack
+	UUID      string
+}
+
+func TestMain(m *testing.M) {
+	log.Printf("setup environment")
+	err := setup()
+	if err == nil {
+		m.Run()
+	}
+	log.Printf("teardown environment")
+	teardown()
+	os.Exit(0)
+}
+
+func setup() error {
+	env = TestEnvironment{UUID: uuid.New()}
+	cfg, ok := configFromEnv()
+	if !ok {
+		log.Printf("No config found in environment")
+		return errors.New("No config found in environment")
+	}
+	cfg.Route = RouteOpts{
+		HostnameOverride: true,
+	}
+
+	openstack, err := newOpenStack(cfg)
+	if err != nil {
+		log.Printf("Failed to construct/authenticate OpenStack: %s", err)
+		return err
+	}
+	env.Openstack = openstack
+
+	err = openstack.Network()
+	if err != nil {
+		return err
+	}
+
+	netopts := networks.CreateOpts{Name: env.UUID, AdminStateUp: networks.Up}
+	network, err := networks.Create(openstack.network, netopts).Extract()
+	if err != nil {
+		log.Printf("Test network not created: %s", err)
+		return err
+	}
+	log.Printf("Test network %s created", env.UUID)
+	env.Network = network
+
+	subnetOpts := subnets.CreateOpts{
+		NetworkID: network.ID,
+		CIDR:      "192.168.199.0/24",
+		IPVersion: subnets.IPv4,
+		Name:      env.UUID,
+	}
+
+	// Execute the operation and get back a subnets.Subnet struct
+	subnet, err := subnets.Create(openstack.network, subnetOpts).Extract()
+	if err != nil {
+		log.Printf("Test subnet not created: %s", err)
+		return err
+	}
+	log.Printf("Test subnet %s created", env.UUID)
+	env.Subnet = subnet
+	env.Openstack.lbOpts.SubnetId = subnet.ID
+
+	err = openstack.Compute()
+	if err != nil {
+		return err
+	}
+
+	serverOpts := servers.CreateOpts{
+		Name:       env.UUID,
+		ImageName:  "cirros",
+		FlavorName: "m1.tiny",
+		Networks:   []servers.Network{{UUID: network.ID}}}
+	server, err := servers.Create(openstack.compute, serverOpts).Extract()
+	if err != nil {
+		log.Printf("Test server not created: %s", err)
+		return err
+	}
+	log.Printf("Test server %s created", env.UUID)
+	env.Servers = append(env.Servers, server)
+
+	routerOpts := routers.CreateOpts{
+		Name:        env.UUID,
+		GatewayInfo: &routers.GatewayInfo{NetworkID: openstack.lbOpts.FloatingNetworkId},
+	}
+	router, err := routers.Create(openstack.network, routerOpts).Extract()
+	if err != nil {
+		log.Printf("Test router not created: %s", err)
+		return err
+	}
+	log.Printf("Test router %s created", env.UUID)
+	env.Router = router
+	env.Openstack.routeOpts.RouterId = router.ID
+
+	interfaceOpts := routers.InterfaceOpts{
+		SubnetID: subnet.ID,
+	}
+	_, err = routers.AddInterface(openstack.network, router.ID, interfaceOpts).Extract()
+	if err != nil {
+		log.Printf("Interface not created: %s", err)
+		return err
+	}
+	log.Printf("Router/subnet interface created")
+
+	// TODO: Should limit amount of loops here or return error if status is
+	// in an expected state
+	for server.Status != "ACTIVE" {
+		server, err = servers.Get(openstack.compute, server.ID).Extract()
+		if err != nil {
+			log.Printf("Server not active yet")
+			return err
+		}
+		time.Sleep(time.Second * 5)
+	}
+	return nil
+}
+
+func teardown() {
+	for _, server := range env.Servers {
+		err := servers.Delete(env.Openstack.compute, server.ID).ExtractErr()
+		if err != nil {
+			log.Printf("Server %s not deleted: %s", server.ID, err)
+		}
+	}
+	if env.Subnet != nil {
+		interfaceOpts := routers.InterfaceOpts{
+			SubnetID: env.Subnet.ID,
+		}
+		if env.Router != nil {
+			_, err := routers.RemoveInterface(env.Openstack.network, env.Router.ID, interfaceOpts).Extract()
+			if err != nil {
+				log.Printf("Interface for subnet %s not deleted: %s", env.Subnet.ID, err)
+			}
+			err = routers.Delete(env.Openstack.network, env.Router.ID).ExtractErr()
+			if err != nil {
+				log.Printf("Router %s not deleted: %s", env.Router.ID, err)
+			}
+		}
+		time.Sleep(time.Second * 10)
+		err := subnets.Delete(env.Openstack.network, env.Subnet.ID).ExtractErr()
+		if err != nil {
+			log.Printf("Subnet %s not deleted: %s", env.Subnet.ID, err)
+		}
+	}
+	if env.Network != nil {
+		err := networks.Delete(env.Openstack.network, env.Network.ID).ExtractErr()
+		if err != nil {
+			log.Printf("Network %s not deleted: %s", env.Network.ID, err)
+		}
+	}
+}
+
+func TestGetServerByName(t *testing.T) {
+	os := env.Openstack
+
+	srv, err := getServerByName(os.compute, env.UUID)
+	if err != nil {
+		t.Fatalf("Instance %s not found: %s", env.UUID, err)
+	}
+	t.Logf("%s", srv)
+}
+
+func TestRoutes(t *testing.T) {
+	os := env.Openstack
+
+	routes, ok := os.Routes()
+	if !ok {
+		t.Fatalf("Routes() returned false - perhaps your stack doesn't support Neutron?")
+	}
+
+	newroute := cloudprovider.Route{
+		DestinationCIDR: "10.164.2.0/24",
+		TargetInstance: cloudprovider.Instance{
+			Name: env.UUID + ".openstack.timbyr.com",
+			ID:   "openstack:///" + env.Servers[0].ID,
+		},
+	}
+	err := os.CreateRoute("test", "", &newroute)
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+
+	routelist, err := routes.ListRoutes("")
+	if err != nil {
+		t.Fatalf("ListRoutes() returned an err - %s", err)
+	}
+	for _, route := range routelist {
+		_, cidr, err := net.ParseCIDR(route.DestinationCIDR)
+		if err != nil {
+			t.Logf("Ignoring route %s, unparsable CIDR: %v", route.Name, err)
+		}
+		t.Logf("%s", cidr)
+		t.Logf("what %s %s", route.DestinationCIDR, route.TargetInstance)
+	}
+
+	err = os.DeleteRoute("test", &newroute)
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
 
 }
