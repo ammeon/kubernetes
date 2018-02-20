@@ -29,7 +29,7 @@ readonly DOCKER_MACHINE_DRIVER=${DOCKER_MACHINE_DRIVER:-"virtualbox --virtualbox
 # This will canonicalize the path
 KUBE_ROOT=$(cd $(dirname "${BASH_SOURCE}")/.. && pwd -P)
 
-source hack/lib/init.sh
+source "${KUBE_ROOT}/hack/lib/init.sh"
 
 # Incoming options
 #
@@ -45,7 +45,7 @@ readonly KUBE_GCS_DELETE_EXISTING="${KUBE_GCS_DELETE_EXISTING:-n}"
 
 # Constants
 readonly KUBE_BUILD_IMAGE_REPO=kube-build
-readonly KUBE_BUILD_IMAGE_CROSS_TAG="v1.6.2-2"
+readonly KUBE_BUILD_IMAGE_CROSS_TAG="v1.6.3-0"
 # KUBE_BUILD_DATA_CONTAINER_NAME=kube-build-data-<hash>"
 
 # Here we map the output directories across both the local and remote _output
@@ -63,6 +63,9 @@ readonly LOCAL_OUTPUT_SUBPATH="${LOCAL_OUTPUT_ROOT}/dockerized"
 readonly LOCAL_OUTPUT_BINPATH="${LOCAL_OUTPUT_SUBPATH}/bin"
 readonly LOCAL_OUTPUT_GOPATH="${LOCAL_OUTPUT_SUBPATH}/go"
 readonly LOCAL_OUTPUT_IMAGE_STAGING="${LOCAL_OUTPUT_ROOT}/images"
+
+# This is a symlink to binaries for "this platform" (e.g. build tools).
+readonly THIS_PLATFORM_BIN="${LOCAL_OUTPUT_ROOT}/bin"
 
 readonly OUTPUT_BINPATH="${CUSTOM_OUTPUT_BINPATH:-$LOCAL_OUTPUT_BINPATH}"
 
@@ -170,10 +173,10 @@ function kube::build::docker_available_on_osx() {
       kube::log::status "Using Docker for MacOS"
       return 0
     fi
-    
+
     kube::log::status "No docker host is set. Checking options for setting one..."
     if [[ -z "$(which docker-machine)" && -z "$(which boot2docker)" ]]; then
-      kube::log::status "It looks like you're running Mac OS X, and neither Docker for Mac, docker-machine or boot2docker are nowhere to be found."
+      kube::log::status "It looks like you're running Mac OS X, yet none of Docker for Mac, docker-machine or boot2docker are on the path."
       kube::log::status "See: https://docs.docker.com/machine/ for installation instructions."
       return 1
     elif [[ -n "$(which docker-machine)" ]]; then
@@ -242,11 +245,15 @@ function kube::build::is_osx() {
   [[ "$(uname)" == "Darwin" ]]
 }
 
+function kube::build::is_gnu_sed() {
+  [[ $(sed --version 2>&1) == *GNU* ]]
+}
+
 function kube::build::update_dockerfile() {
-  if kube::build::is_osx; then
-    sed_opts=(-i '')
-  else
+  if kube::build::is_gnu_sed; then
     sed_opts=(-i)
+  else
+    sed_opts=(-i '')
   fi
   sed "${sed_opts[@]}" "s/KUBE_BUILD_IMAGE_CROSS_TAG/${KUBE_BUILD_IMAGE_CROSS_TAG}/" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
 }
@@ -474,24 +481,9 @@ function kube::build::build_image_built() {
 # The set of source targets to include in the kube-build image
 function kube::build::source_targets() {
   local targets=(
-    api
-    build
-    cluster
-    cmd
-    docs
-    examples
-    federation
-    Godeps/Godeps.json
-    hack
-    LICENSE
-    pkg
-    plugin
-    DESIGN.md
-    README.md
-    test
-    third_party
-    vendor
-    contrib/mesos
+      $(find . -mindepth 1 -maxdepth 1 -not \(        \
+          \( -path ./_\* -o -path ./.git\* \) -prune  \
+        \))
   )
   if [ -n "${KUBERNETES_CONTRIB:-}" ]; then
     for contrib in "${KUBERNETES_CONTRIB}"; do
@@ -668,6 +660,8 @@ function kube::build::copy_output() {
     kube::log::status "Syncing back _output/dockerized/bin directory from remote Docker"
     rm -rf "${LOCAL_OUTPUT_BINPATH}"
     mkdir -p "${LOCAL_OUTPUT_BINPATH}"
+    rm -f "${THIS_PLATFORM_BIN}"
+    ln -s "${LOCAL_OUTPUT_BINPATH}" "${THIS_PLATFORM_BIN}"
 
     kube::build::destroy_container "${KUBE_BUILD_CONTAINER_NAME}"
     "${docker_cmd[@]}" bash -c "cp -r ${REMOTE_OUTPUT_BINPATH} /tmp/bin;touch /tmp/finished;rm /tmp/bin/test_for_remote;/bin/sleep 600" > /dev/null 2>&1
@@ -961,9 +955,6 @@ function kube::release::package_kube_manifests_tarball() {
   local objects
   objects=$(cd "${KUBE_ROOT}/cluster/addons" && find . \( -name \*.yaml -or -name \*.yaml.in -or -name \*.json \) | grep -v demo)
   tar c -C "${KUBE_ROOT}/cluster/addons" ${objects} | tar x -C "${dst_dir}"
-  objects=$(cd "${KUBE_ROOT}/cluster/saltbase/salt/kube-dns" && find . \( -name \*.yaml -or -name \*.yaml.in -or -name \*.json \) | grep -v demo)
-  mkdir -p "${dst_dir}/dns"
-  tar c -C "${KUBE_ROOT}/cluster/saltbase/salt/kube-dns" ${objects} | tar x -C "${dst_dir}/dns"
 
   # This is for coreos only. ContainerVM, GCI, or Trusty does not use it.
   cp -r "${KUBE_ROOT}/cluster/gce/coreos/kube-manifests"/* "${release_stage}/"
@@ -1224,7 +1215,8 @@ function kube::release::gcs::copy_release_artifacts() {
 
   gsutil ls -lhr "${gcs_destination}" || return 1
 
-  if [[ -n "${KUBE_GCS_RELEASE_BUCKET_MIRROR:-}" ]]; then
+  if [[ -n "${KUBE_GCS_RELEASE_BUCKET_MIRROR:-}" ]] &&
+     [[ "${KUBE_GCS_RELEASE_BUCKET_MIRROR}" != "${KUBE_GCS_RELEASE_BUCKET}" ]]; then
     local -r gcs_mirror="gs://${KUBE_GCS_RELEASE_BUCKET_MIRROR}/${KUBE_GCS_RELEASE_PREFIX}"
     kube::log::status "Mirroring build to ${gcs_mirror}"
     gsutil -q -m "${gcs_options[@]+${gcs_options[@]}}" rsync -d -r "${gcs_destination}" "${gcs_mirror}" || return 1
@@ -1500,7 +1492,8 @@ function kube::release::gcs::publish() {
 
   kube::release::gcs::publish_to_bucket "${KUBE_GCS_RELEASE_BUCKET}" "${publish_file}" || return 1
 
-  if [[ -n "${KUBE_GCS_RELEASE_BUCKET_MIRROR:-}" ]]; then
+  if [[ -n "${KUBE_GCS_RELEASE_BUCKET_MIRROR:-}" ]] &&
+     [[ "${KUBE_GCS_RELEASE_BUCKET_MIRROR}" != "${KUBE_GCS_RELEASE_BUCKET}" ]]; then
     kube::release::gcs::publish_to_bucket "${KUBE_GCS_RELEASE_BUCKET_MIRROR}" "${publish_file}" || return 1
   fi
 }

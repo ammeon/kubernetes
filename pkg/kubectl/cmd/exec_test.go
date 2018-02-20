@@ -32,6 +32,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/fake"
+	"k8s.io/kubernetes/pkg/util/term"
 )
 
 type fakeRemoteExecutor struct {
@@ -40,7 +41,7 @@ type fakeRemoteExecutor struct {
 	execErr error
 }
 
-func (f *fakeRemoteExecutor) Execute(method string, url *url.URL, config *restclient.Config, stdin io.Reader, stdout, stderr io.Writer, tty bool) error {
+func (f *fakeRemoteExecutor) Execute(method string, url *url.URL, config *restclient.Config, stdin io.Reader, stdout, stderr io.Writer, tty bool, terminalSizeQueue term.TerminalSizeQueue) error {
 	f.method = method
 	f.url = url
 	return f.execErr
@@ -124,10 +125,10 @@ func TestPodAndContainer(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		f, tf, codec := NewAPIFactory()
+		f, tf, _, ns := NewAPIFactory()
 		tf.Client = &fake.RESTClient{
-			Codec:  codec,
-			Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) { return nil, nil }),
+			NegotiatedSerializer: ns,
+			Client:               fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) { return nil, nil }),
 		}
 		tf.Namespace = "test"
 		tf.ClientConfig = &restclient.Config{}
@@ -180,9 +181,9 @@ func TestExec(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		f, tf, codec := NewAPIFactory()
+		f, tf, codec, ns := NewAPIFactory()
 		tf.Client = &fake.RESTClient{
-			Codec: codec,
+			NegotiatedSerializer: ns,
 			Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 				switch p, m := req.URL.Path, req.Method; {
 				case p == test.podPath && m == "GET":

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ type e2eService struct {
 	kubeletStaticPodDir string
 	nodeName            string
 	logFiles            map[string]logFileData
+	cgroupsPerQOS       bool
 }
 
 type logFileData struct {
@@ -57,14 +59,18 @@ const (
 	LOG_VERBOSITY_LEVEL = "4"
 )
 
-func newE2eService(nodeName string) *e2eService {
+func newE2eService(nodeName string, cgroupsPerQOS bool) *e2eService {
 	// Special log files that need to be collected for additional debugging.
 	var logFiles = map[string]logFileData{
 		"kern.log":   {[]string{"/var/log/kern.log"}, []string{"-k"}},
 		"docker.log": {[]string{"/var/log/docker.log", "/var/log/upstart/docker.log"}, []string{"-u", "docker"}},
 	}
 
-	return &e2eService{nodeName: nodeName, logFiles: logFiles}
+	return &e2eService{
+		nodeName:      nodeName,
+		logFiles:      logFiles,
+		cgroupsPerQOS: cgroupsPerQOS,
+	}
 }
 
 func (es *e2eService) start() error {
@@ -233,9 +239,24 @@ func (es *e2eService) startKubeletServer() (*killCmd, error) {
 		"--config", es.kubeletStaticPodDir,
 		"--file-check-frequency", "10s", // Check file frequently so tests won't wait too long
 		"--v", LOG_VERBOSITY_LEVEL, "--logtostderr",
-		"--network-plugin=kubenet",
 		"--pod-cidr=10.180.0.0/24", // Assign a fixed CIDR to the node because there is no node controller.
 	)
+	if es.cgroupsPerQOS {
+		cmdArgs = append(cmdArgs,
+			"--cgroups-per-qos", "true",
+			"--cgroup-root", "/",
+		)
+	}
+	if !*disableKubenet {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		cmdArgs = append(cmdArgs,
+			"--network-plugin=kubenet",
+			"--network-plugin-dir", filepath.Join(cwd, CNIDirectory, "bin")) // Enable kubenet
+	}
+
 	cmd := exec.Command("sudo", cmdArgs...)
 	hcc := newHealthCheckCommand(
 		"http://127.0.0.1:10255/healthz",
@@ -376,5 +397,5 @@ func newHealthCheckCommand(healthCheckUrl string, cmd *exec.Cmd, filename string
 }
 
 func (hcc *healthCheckCommand) String() string {
-	return fmt.Sprintf("`%s %s` health-check: %s", hcc.Path, strings.Join(hcc.Args, " "), hcc.HealthCheckUrl)
+	return fmt.Sprintf("`%s` health-check: %s", strings.Join(append([]string{hcc.Path}, hcc.Args[1:]...), " "), hcc.HealthCheckUrl)
 }

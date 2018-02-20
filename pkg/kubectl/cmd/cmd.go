@@ -160,7 +160,7 @@ __custom_func() {
    * componentstatuses (aka 'cs')
    * configmaps
    * daemonsets (aka 'ds')
-   * deployments
+   * deployments (aka 'deploy')
    * events (aka 'ev')
    * endpoints (aka 'ep')
    * horizontalpodautoscalers (aka 'hpa')
@@ -169,6 +169,7 @@ __custom_func() {
    * limitranges (aka 'limits')
    * nodes (aka 'no')
    * namespaces (aka 'ns')
+   * petsets (alpha feature, may be unstable)
    * pods (aka 'po')
    * persistentvolumes (aka 'pv')
    * persistentvolumeclaims (aka 'pvc')
@@ -183,13 +184,12 @@ __custom_func() {
 	usage_template = `{{if gt .Aliases 0}}
 
 Aliases:
-  {{.NameAndAliases}}
-{{end}}{{if .HasExample}}
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
 
 Examples:
 {{ .Example }}{{end}}{{ if .HasAvailableSubCommands}}
 
-Available Commands:{{range .Commands}}{{if .IsAvailableCommand}}
+Available Sub-commands:{{range .Commands}}{{if .IsAvailableCommand}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{ if .HasLocalFlags}}
 
 Flags:
